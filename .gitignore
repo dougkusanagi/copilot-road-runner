@@ -4,6 +4,8 @@ __pycache__/
 .uv/
 last.png
 run.jsonl
+run-*/
+config.vm.json
 debug/
 dist/
 build/

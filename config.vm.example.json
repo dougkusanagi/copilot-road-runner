@@ -1,0 +1,19 @@
+{
+  "planner": {
+    "provider": "llama.cpp",
+    "base_url": "http://HOST_IP:8091/v1",
+    "model": "MiniCPM5-1B",
+    "temperature": 0.1,
+    "timeout_s": 90
+  },
+  "vision": {
+    "provider": "llama.cpp",
+    "base_url": "http://HOST_IP:8082/v1",
+    "model": "Vocaela-2-500M-1024R2",
+    "timeout_s": 180
+  },
+  "max_steps": 4,
+  "screenshot_max_width": 1024,
+  "verify_wait_ms": 500,
+  "stop_hotkey": "ctrl+alt+esc"
+}
