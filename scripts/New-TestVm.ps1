@@ -118,8 +118,14 @@ if ($OpenModelPorts) {
 }
 
 # 8. Snapshot limpo (rode DEPOIS do guest pronto: Windows + Python + projeto).
+# Idempotente: re-criar substitui o "clean" anterior em vez de duplicar.
 if ($CreateCheckpoint) {
     if ($PSCmdlet.ShouldProcess($VmName, "Checkpoint 'clean'")) {
+        $old = Get-VMSnapshot -VMName $VmName -Name "clean" -ErrorAction SilentlyContinue
+        if ($old) {
+            Write-Host "Checkpoint 'clean' anterior encontrado: removendo p/ recriar."
+            $old | Remove-VMSnapshot
+        }
         Checkpoint-VM -Name $VmName -SnapshotName "clean"
     }
 }

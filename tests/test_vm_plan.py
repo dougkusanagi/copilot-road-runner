@@ -71,6 +71,7 @@ class TestVmScripts(unittest.TestCase):
                        "60GB -Dynamic",  # VHDX dinâmico
                        "EnableEnhancedSessionMode",  # copy/paste console
                        'Checkpoint-VM -Name $VmName -SnapshotName "clean"',
+                       "Remove-VMSnapshot",  # re-criar clean sem duplicar
                        "Get-VM -Name $VmName",  # nunca duplica
                        "New-VHD", "New-VM -Name $VmName -Generation 2"):
             self.assertIn(needle, src, f"trecho ausente: {needle}")
