@@ -1,9 +1,19 @@
 {
-  "base_url": "http://127.0.0.1:1234/v1",
-  "vision_model": "MAI-UI-2B",
-  "max_steps": 20,
-  "scorer_threshold": 0.8,
-  "screenshot_max_width": 1280,
+  "planner": {
+    "provider": "llama.cpp",
+    "base_url": "http://127.0.0.1:8081/v1",
+    "model": "MiniCPM5-1B",
+    "temperature": 0.1,
+    "timeout_s": 90
+  },
+  "vision": {
+    "provider": "llama.cpp",
+    "base_url": "http://127.0.0.1:8082/v1",
+    "model": "Vocaela-2-500M-1024R2",
+    "timeout_s": 180
+  },
+  "max_steps": 30,
+  "screenshot_max_width": 1024,
   "verify_wait_ms": 500,
   "stop_hotkey": "ctrl+alt+esc"
 }
