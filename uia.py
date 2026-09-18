@@ -67,12 +67,55 @@ def find_window_titles() -> list[str]:
         return []
 
 
+def foreground_title() -> str:
+    """Título da janela em foreground (barato, p/ guard de foco)."""
+    try:
+        import ctypes
+
+        from pywinauto import Desktop
+
+        desk = Desktop(backend="uia")
+        try:
+            h = ctypes.windll.user32.GetForegroundWindow()
+            if h:
+                t = desk.window(handle=h).window_text() or ""
+                if t.strip():
+                    return t
+        except Exception:
+            pass
+        # fallback: janela com foco / primeira com título
+        try:
+            wins = desk.windows(top_level_only=True, visible_only=True)
+        except Exception:
+            return ""
+        for w in wins:
+            try:
+                for attr in ("has_focus", "is_active", "has_keyboard_focus"):
+                    fn = getattr(w, attr, None)
+                    if callable(fn) and fn():
+                        t = w.window_text() or ""
+                        if t.strip():
+                            return t
+            except Exception:
+                continue
+        for w in wins:
+            try:
+                t = w.window_text() or ""
+                if t.strip():
+                    return t
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return ""
+
+
 def active_window_snapshot(timeout: float = 5.0,
-                           max_elements: int = 120) -> tuple[list[dict], str]:
+                           max_elements: int = 120) -> tuple[list[dict], str, tuple | None]:
     """Elementos úteis da janela ATIVA, formato compacto p/ decisão rápida.
 
-    Retorna (items, title) onde items = [{id, name, type, bounds}].
-    Ignora invisíveis, sem nome, com área trivial ou fora da janela.
+    Retorna (items, title, wrect) onde items = [{id, name, type, bounds}].
+    Ignora invisíveis, sem nome, com área trivial ou fora da janela/tela.
     """
     from pywinauto import Desktop
 
@@ -83,9 +126,9 @@ def active_window_snapshot(timeout: float = 5.0,
         active = None
         # 1. tenta handle da janela em foreground (mais preciso)
         try:
-            from pywinauto.win32functions import GetForegroundWindow
+            import ctypes
 
-            h = GetForegroundWindow()
+            h = ctypes.windll.user32.GetForegroundWindow()
             if h:
                 try:
                     active = desk.window(handle=h).wrapper_object()
@@ -98,7 +141,7 @@ def active_window_snapshot(timeout: float = 5.0,
             try:
                 wins = desk.windows(top_level_only=True, visible_only=True)
             except Exception:
-                return [], ""
+                return [], "", None
             for w in wins:
                 try:
                     for attr in ("has_focus", "is_active", "has_keyboard_focus"):
@@ -120,7 +163,7 @@ def active_window_snapshot(timeout: float = 5.0,
                     except Exception:
                         continue
         if active is None:
-            return [], ""
+            return [], "", None
         try:
             title = active.window_text() or ""
         except Exception:
@@ -130,6 +173,14 @@ def active_window_snapshot(timeout: float = 5.0,
             wrect = (wr.left, wr.top, wr.right, wr.bottom)
         except Exception:
             wrect = None
+        try:  # tela virtual (multi-monitor): candidatos fora dela são lixo
+            import ctypes as _ct
+
+            _u = _ct.windll.user32
+            vx, vy, vw, vh = (_u.GetSystemMetrics(76), _u.GetSystemMetrics(77),
+                              _u.GetSystemMetrics(78), _u.GetSystemMetrics(79))
+        except Exception:
+            vx, vy, vw, vh = (0, 0, 10000, 10000)
 
         def walk(elem, depth: int) -> None:
             if len(items) >= max_elements or depth > MAX_DEPTH:
@@ -149,11 +200,13 @@ def active_window_snapshot(timeout: float = 5.0,
                     bounds = (0, 0, 0, 0)
                 l, t, rr, b = bounds
                 area_ok = (rr - l) > 4 and (b - t) > 4
+                cx, cy = (l + rr) // 2, (t + b) // 2
+                on_screen = vx <= cx < vx + vw and vy <= cy < vy + vh
                 inside = True
                 if wrect is not None:
                     wl, wt, wrr, wb = wrect
                     inside = not (rr < wl or l > wrr or b < wt or t > wb)
-                if name and area_ok and inside:
+                if name and area_ok and inside and on_screen:
                     items.append({"id": len(items), "name": name,
                                   "type": ctype, "bounds": list(bounds)})
                 for child in elem.children():
@@ -164,9 +217,9 @@ def active_window_snapshot(timeout: float = 5.0,
                 return
 
         walk(active, 0)
-        return items, title
+        return items, title, wrect
     except Exception:
-        return [], ""
+        return [], "", None
 
 
 if __name__ == "__main__":

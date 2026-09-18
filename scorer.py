@@ -116,6 +116,8 @@ class SimpleScorer(ActionScorer):
                 ltoks = _tokens(c.name)
                 best = 0.0
                 for g in gtoks:
+                    if len(g) < 3 and not g.isdigit():
+                        continue  # tokens curtos ("o","e","de") casam com tudo
                     for lstr in ({c.name.lower()} | set(ltoks)):
                         best = max(best, _similarity(g, lstr))
                 # bônus: todos os tokens significativos do goal aparecem no label
@@ -148,13 +150,20 @@ class JevScorer(ActionScorer):
         raise NotImplementedError("JevScorer ainda não integrado; usando SimpleScorer.")
 
 
+JUNK_NAMES = {
+    "non client input sink window",
+}
+
+
 def build_candidates(items: list[dict], max_clicks: int = 12) -> list[CandidateAction]:
     """Candidatos a partir do snapshot compacto [{id,name,type,bounds}]."""
     cands: list[CandidateAction] = []
     seen: set[str] = set()
     for it in items:
         name = (it.get("name") or "").strip()
-        if not name or name.lower() in seen:
+        if not name or len(name) > 60:  # títulos longos (ex: aba de terminal) viram ruído
+            continue
+        if name.lower() in seen or name.lower() in JUNK_NAMES:
             continue
         seen.add(name.lower())
         cands.append(CandidateAction(kind="click", label=f'click("{name}")',

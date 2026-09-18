@@ -31,6 +31,8 @@ NOTEPAD_WORDS = ["notepad", "bloco de notas"]
 CALC_WORDS = ["calculadora", "calculator"]
 BROWSER_WORDS = ["browser", "navegador", "edge", "chrome", "brave", "busque", "buscar",
                  "pesquise", "search", "google"]
+BROWSER_TITLES = ["edge", "chrome", "brave", "google", "nova guia", "new tab"]
+FOLLOW_WORDS = ["clique", "click", "resultado", "result", "primeiro", "link"]
 
 
 def _log(obj: dict) -> None:
@@ -61,43 +63,74 @@ def _extract_search_query(instruction: str) -> str:
 
 
 # --- fluxos determinísticos (steps fixos, sem IA) -----------------------------
+def _focused(words: list[str]) -> bool:
+    from uia import foreground_title
+
+    fg = foreground_title().lower()
+    return any(w in fg for w in words)
+
+
 def _deterministic(step: int, instruction: str, ctx: dict) -> Action | None:
     if _has_any(instruction, NOTEPAD_WORDS):
         if step == 0:
             return Action(type="open", target="notepad")
         if step == 1:
             return Action(type="focus", target="bloco de notas||notepad")
-        if step == 2 and not ctx.get("typed"):
+        if ctx.get("typed"):
+            return Action(type="done")
+        if step == 2:
+            # Win11 = multi-tab: abre aba nova p/ nunca digitar em doc do usuário
+            return Action(type="hotkey", key="ctrl+n")
+        if step >= 3:
             text = _extract_text_to_type(instruction)
             if text:
                 return Action(type="type", text=text)
             return None  # sem texto claro → cai p/ UIA/VLM
-        if step == 2 and ctx.get("typed"):
-            return Action(type="done")
         return None
     if _has_any(instruction, CALC_WORDS):
         if step == 0:
             return Action(type="open", target="calc")
         return None  # resto via UIA (Teste 2)
     if _has_any(instruction, BROWSER_WORDS):
-        query = _extract_search_query(instruction)
-        if step == 0:
-            return Action(type="open", target="msedge")
-        if step == 1:
+        # máquina de estágios (ctx), não steps: nunca digita sem o browser focado.
+        st = ctx.get("bstage", 0)
+        if st == 0:
+            if step == 0:
+                ctx["bstage"] = 1
+                return Action(type="open", target="msedge")
+            return None
+        if not _focused(BROWSER_TITLES):
+            n = ctx.get("bfocus", 0)
+            if n < 2:
+                ctx["bfocus"] = n + 1
+                return Action(type="focus", target="edge||chrome||brave")
+            raise RuntimeError("navegador não abriu/não focou; abortando "
+                               "para não atuar na janela errada.")
+        if st == 1:
+            ctx["bstage"] = 2
             return Action(type="hotkey", key="ctrl+l")
-        if step == 2:
+        if st == 2:
+            from urllib.parse import quote_plus
+
+            query = _extract_search_query(instruction)
             text = query or instruction
             if not text.startswith("http"):
-                text = f"https://www.google.com/search?q={text.replace(' ', '+')}"
+                text = "https://www.google.com/search?q=" + quote_plus(text)
+            ctx["bstage"] = 3
             return Action(type="type", text=text)
-        if step == 3:
+        if st == 3:
+            ctx["bstage"] = 4
             return Action(type="hotkey", key="enter")
-        return None
+        # st >= 4: busca submetida. Sem follow-up explícito → done;
+        # com "clique no resultado..." → segue p/ UIA/scorer/VLM.
+        if _has_any(instruction, FOLLOW_WORDS):
+            return None
+        return Action(type="done")
     return None
 
 
 # --- conclusão por verificação (sem LLM) --------------------------------------
-def _done_by_verify(instruction: str) -> tuple[bool, str]:
+def _done_by_verify(instruction: str, ctx: dict) -> tuple[bool, str]:
     """Checa objetivo cumprido via UIA. Só p/ testes determinísticos."""
     if _has_any(instruction, CALC_WORDS):
         digit = _extract_digit(instruction)
@@ -116,6 +149,10 @@ def _done_by_verify(instruction: str) -> tuple[bool, str]:
             if needle and needle in (el.name or "").lower():
                 return True, "notepad text verified"
         return False, ""
+    if _has_any(instruction, BROWSER_WORDS):
+        if ctx.get("bstage", 0) >= 4 and _focused(BROWSER_TITLES):
+            return True, "browser search submitted"
+        return False, ""
     return False, ""
 
 
@@ -131,7 +168,7 @@ def decide(instruction: str, step: int, ctx: dict, cfg: dict) -> tuple[Decision,
                         reason="deterministic tool"), t
 
     t1 = time.perf_counter()
-    items, title = active_window_snapshot()
+    items, title, wrect = active_window_snapshot()
     t["uia_ms"] = round((time.perf_counter() - t1) * 1000, 1)
     t["uia_title"] = title
     t["uia_count"] = len(items)
@@ -148,9 +185,14 @@ def decide(instruction: str, step: int, ctx: dict, cfg: dict) -> tuple[Decision,
     if top.confidence >= threshold and top.candidate.kind == "click":
         b = top.candidate.bounds or [0, 0, 0, 0]
         cx, cy = (b[0] + b[2]) // 2, (b[1] + b[3]) // 2
-        return Decision(action=Action(type="click", x=cx, y=cy), source="scorer",
-                        confidence=top.confidence,
-                        reason=f'scorer {top.candidate.label}'), t
+        # clique precisa cair DENTRO da janela ativa (mata rects fantasmas)
+        if wrect is not None and not (wrect[0] <= cx <= wrect[2]
+                                      and wrect[1] <= cy <= wrect[3]):
+            t["scorer_top"] = f"{top.candidate.label} (fora da janela; ignorado)"
+        else:
+            return Decision(action=Action(type="click", x=cx, y=cy), source="scorer",
+                            confidence=top.confidence,
+                            reason=f'scorer {top.candidate.label}'), t
 
     # VLM: só grounding
     if ctx.get("no_vlm"):
@@ -193,16 +235,26 @@ def verify(action: Action, instruction: str, cfg: dict) -> tuple[bool, str]:
                 return ok, f"calculator display = {el.name!r}"
         return False, "calc results not found"
     if _has_any(instruction, NOTEPAD_WORDS):
+        from uia import foreground_title as _fg
+
+        fg = _fg()
+        ok = "bloco de notas" in fg.lower() or "notepad" in fg.lower()
+        if not ok:
+            return False, f"foco fora do notepad: active={fg!r} (retry)"
         text = _extract_text_to_type(instruction)
         needle = text[:20].lower() if text else ""
         if needle:
             for el in snapshot():
                 if needle in (el.name or "").lower():
                     return True, "notepad text verified"
-        items, title = active_window_snapshot()
-        ok = bool(title)
-        return ok, f"active={title!r} (texto não exposto na UIA)"
-    items, title = active_window_snapshot()
+        return True, f"typed, active={fg!r} (texto não exposto na UIA)"
+    if _has_any(instruction, BROWSER_WORDS):
+        from uia import foreground_title as _fg
+
+        fg = _fg()
+        ok = _focused(BROWSER_TITLES)
+        return ok, f"browser active={fg!r}" if ok else f"foco fora do browser: active={fg!r}"
+    items, title, _ = active_window_snapshot()
     return bool(title), f"active={title!r}"
 
 
@@ -216,6 +268,13 @@ def run(instruction: str, cfg: dict) -> dict:
     print(f"Task: {instruction}")
     print("Stop: Ctrl+Alt+Esc (ou ESC) | Ctrl+C no terminal.")
     safety.start()
+    try:
+        import overlay as _ov
+
+        ov_on = _ov.start()
+    except Exception:
+        ov_on = False
+    print(f"Overlay de controle: {'ON (borda azul)' if ov_on else 'OFF (tkinter indisponível)'}")
     if LOG.exists():
         LOG.unlink()
 
@@ -242,7 +301,7 @@ def run(instruction: str, cfg: dict) -> dict:
             s0 = time.perf_counter()
             path, real_size = take_screenshot()
 
-            done, note = _done_by_verify(instruction)
+            done, note = _done_by_verify(instruction, ctx)
             if done:
                 emit("VERIFY", note, "")
                 result = "done"
@@ -281,17 +340,32 @@ def run(instruction: str, cfg: dict) -> dict:
             history.append(k)
             if len(history) >= 3 and history[-1] == history[-2] == history[-3]:
                 if not forced_vision and not ctx.get("no_vlm"):
-                    print("mesma ação 3× → forçando vision fallback 1×")
+                    print("mesma acao 3x -> forcando vision fallback 1x")
                     forced_vision = True
                     history.clear()
                     continue
-                print("loop persistente → stop.")
+                print("loop persistente -> stop.")
                 _log({"step": step, "event": "loop"})
                 result = "loop"
                 break
 
             e0 = time.perf_counter()
-            desc = execute(dec.action)
+            # fecha TOCTOU: toast pode roubar o foco entre decide e execute;
+            # reafirma o foco imediatamente antes de digitar.
+            if dec.action.type == "type" and _has_any(instruction, NOTEPAD_WORDS):
+                from tools import focus_window as _fw
+                _fw("bloco de notas||notepad", timeout=3.0)
+            if dec.action.type == "type" and _has_any(instruction, BROWSER_WORDS):
+                from tools import focus_window as _fw
+                _fw("edge||chrome||brave", timeout=3.0)
+            try:
+                desc = execute(dec.action)
+            except (ValueError, AssertionError) as e:
+                # ex: clique fora da tela → para com mensagem, nunca clica no escuro
+                print(f"PARADO step {step}: ação recusada: {e}")
+                _log({"step": step, "event": "refused", "error": str(e)})
+                result = "stuck"
+                break
             exec_ms = (time.perf_counter() - e0) * 1000
             metrics["execution_ms"] += exec_ms
             emit("EXEC", desc, f"{exec_ms:.0f} ms")
@@ -320,6 +394,12 @@ def run(instruction: str, cfg: dict) -> dict:
         print("\nabortado via Ctrl+C.")
     finally:
         safety.stop()
+        try:
+            import overlay as _ov
+
+            _ov.stop()
+        except Exception:
+            pass
 
     total_ms = (time.perf_counter() - total0) * 1000
     print(f"\n{result.upper()}")

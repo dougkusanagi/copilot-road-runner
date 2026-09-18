@@ -11,33 +11,55 @@ pyautogui.PAUSE = 0.15
 from schemas import Action
 
 
+def _virtual_screen() -> tuple[int, int, int, int]:
+    import ctypes
+
+    u = ctypes.windll.user32
+    return (u.GetSystemMetrics(76), u.GetSystemMetrics(77),
+            u.GetSystemMetrics(78), u.GetSystemMetrics(79))
+
+
+def _check_coords(x: int, y: int) -> None:
+    """Recusa clique fora da tela virtual (nunca clica no escuro)."""
+    vx, vy, vw, vh = _virtual_screen()
+    if not (vx <= x < vx + vw and vy <= y < vy + vh):
+        raise ValueError(f"coords fora da tela virtual ({x},{y}) vs "
+                         f"({vx},{vy},{vw},{vh}); abortando clique.")
+
+
 def execute(action: Action) -> str:
     """Executa uma Action. Retorna descrição p/ log. Levanta exceção se falhar."""
-    from tools import focus_window
+    from tools import focus_window, open_app
 
     t = action.type
     if t == "click":
         assert action.x is not None and action.y is not None, "click precisa de x,y"
+        _check_coords(action.x, action.y)
         pyautogui.moveTo(action.x, action.y, duration=0.15)
         pyautogui.click(x=action.x, y=action.y, clicks=action.clicks or 1)
         return f"click({action.x},{action.y})"
     if t == "double_click":
         assert action.x is not None and action.y is not None
+        _check_coords(action.x, action.y)
         pyautogui.moveTo(action.x, action.y, duration=0.15)
         pyautogui.doubleClick(x=action.x, y=action.y)
         return f"double_click({action.x},{action.y})"
     if t == "right_click":
         assert action.x is not None and action.y is not None
+        _check_coords(action.x, action.y)
         pyautogui.moveTo(action.x, action.y, duration=0.15)
         pyautogui.rightClick(x=action.x, y=action.y)
         return f"right_click({action.x},{action.y})"
     if t == "move":
         assert action.x is not None and action.y is not None
+        _check_coords(action.x, action.y)
         pyautogui.moveTo(action.x, action.y, duration=0.15)
         return f"move({action.x},{action.y})"
     if t == "drag":
         assert action.x is not None and action.y is not None
         assert action.x2 is not None and action.y2 is not None, "drag precisa de x2,y2"
+        _check_coords(action.x, action.y)
+        _check_coords(action.x2, action.y2)
         pyautogui.moveTo(action.x, action.y, duration=0.15)
         pyautogui.dragTo(action.x2, action.y2, duration=0.4)
         return f"drag({action.x},{action.y}->{action.x2},{action.y2})"
@@ -55,12 +77,8 @@ def execute(action: Action) -> str:
         pyautogui.hotkey(*parts)
         return f"hotkey({action.key})"
     if t == "open":
-        import subprocess
-
         assert action.target, "open precisa de target"
-        subprocess.Popen(action.target, shell=True)
-        time.sleep(1.0)
-        return f"open({action.target})"
+        return open_app(action.target)
     if t == "focus":
         assert action.target, "focus precisa de target (substring do título)"
         ok = focus_window(action.target)

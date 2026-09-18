@@ -7,9 +7,28 @@ import time
 from schemas import Action, UIElement
 
 
+APP_COMMANDS = {
+    "msedge": 'cmd /c start "" msedge',
+    "edge": 'cmd /c start "" msedge',
+    "microsoft edge": 'cmd /c start "" msedge',
+    "chrome": 'cmd /c start "" chrome',
+    "brave": 'cmd /c start "" brave',
+    "notepad": "notepad",
+    "calc": "calc",
+    "calculator": "calc",
+}
+
+
 def open_app(target: str) -> str:
-    """Abre app via shell. Ex: 'notepad', 'calc', 'msedge'."""
-    subprocess.Popen(target, shell=True)
+    """Abre app. Resolve via `start` (App Paths) p/ navegadores; stdout some no log."""
+    import os
+
+    key = target.strip().lower()
+    cmd = APP_COMMANDS.get(key, target)
+    if key not in APP_COMMANDS and not key.endswith(".exe"):
+        cmd = f'cmd /c start "" {target}'
+    with open(os.devnull, "w") as dn:
+        subprocess.Popen(cmd, shell=True, stdout=dn, stderr=dn)
     time.sleep(1.2)
     return f"opened {target}"
 
@@ -28,15 +47,21 @@ def focus_window(title_substr: str, timeout: float = 8.0) -> bool:
     while time.perf_counter() - t0 < timeout:
         try:
             desk = Desktop(backend="uia")
+            matches = []
             for w in desk.windows(top_level_only=True, visible_only=True):
                 try:
-                    title = (w.window_text() or "").lower()
-                    if any(a in title for a in alts):
-                        w.set_focus()
-                        time.sleep(0.4)
-                        return True
+                    title = w.window_text() or ""
+                    if any(a in title.lower() for a in alts):
+                        matches.append((title, w))
                 except Exception:
                     continue
+            if matches:
+                # prefere documento novo/untitled (não digita em doc do usuário)
+                matches.sort(key=lambda tw: 0 if any(
+                    k in tw[0].lower() for k in ("sem t", "untitled")) else 1)
+                matches[0][1].set_focus()
+                time.sleep(0.4)
+                return True
         except Exception:
             pass
         time.sleep(0.5)
