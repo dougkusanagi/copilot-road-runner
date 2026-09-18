@@ -77,7 +77,35 @@ def _extract_search_query(instruction: str) -> str:
 # (dígito → nomes PT+EN em _DIGIT_WORDS acima; _resolve_uia expande sozinho)
 
 
-# --- UIA resolve por nome (sem scorer no fluxo principal) ---------------------
+# --- bootstrap do app pedido (ferramenta determinística, sem IA) ---------------
+def _app_bootstrap(instruction: str, step: int, active_lower: str) -> Action | None:
+    """Garante a JANELA certa aberta antes das decisões por modelo.
+
+    open_app é ferramenta (o MiniCPM não abre processo), por isso estes steps
+    fixos existem e rodam ANTES do planner decidir qualquer coisa: o planner
+    já recebe a janela certa no estado, e a partir daí tudo é IA
+    (uia_click → Vocaela → type/hotkey...). Sem branch por tipo de app aqui:
+    só abrir app + confirmar foco.
+    """
+    low = instruction.lower()
+    want = "notepad.exe" if any(w in low for w in ("notepad", "bloco de notas")) \
+        else "calc.exe" if any(w in low for w in ("calculadora", "calculator")) \
+        else None
+    if want is None:
+        return None  # browser e resto: planner resolve (open_url/focus/visual)
+    app_word = "notepad" if want == "notepad.exe" else "calcul"
+    if app_word in active_lower:
+        return None  # janela certa já ativa: mão p/ os modelos
+    if step == 0:
+        return Action(type="open", target=want)
+    from tools import focus_window
+
+    focus_window("bloco de notas||notepad" if want == "notepad.exe"
+                 else "calculadora||calculator", timeout=3.0)
+    return Action(type="wait", ms=300)
+
+
+# --- verify -------------------------------------------------------------------
 def _resolve_uia(items: list[dict], target: str, wrect: tuple | None,
                  state_title: str = "") -> Action | None:
     """Encontra elemento pelo NOME na janela ativa -> click no centro.
@@ -186,6 +214,14 @@ def _decide_planner(instruction: str, ctx: dict, cfg: dict,
     ctx["planner_errors"] = 0
     ctx["last_error"] = ""
 
+    # bootstrap determinístico do app pedido (steps fixos, SEM IA): open_app
+    # é ferramenta — um planner 1B local não abre processo no Windows, só
+    # produz JSON. Passado o bootstrap da janela certa, 100% por modelos.
+    boot = _app_bootstrap(instruction, step, (title or "").lower())
+    if boot is not None:
+        return Decision(action=boot, source="planner", confidence=1.0,
+                        reason=f"bootstrap {_short(dec)}"), t
+
     # guarda anti-janela-errada: sem foco no alvo, planner deve focar/abrir —
     # se ele insistir em agir, devolve como last_error em vez de executar.
     if _has_any(instruction, CALC_WORDS) and "calcul" not in title.lower() \
@@ -240,7 +276,7 @@ def decide(instruction: str, step: int, ctx: dict, cfg: dict,
     """TODA decisão vem dos modelos. Sem planner -> erro honesto (sem router)."""
     if planner is None or vocaela is None:
         raise RuntimeError(
-            "arquitetura de 2 modelos exige MiniCPM5-1B (8081) e Vocaela (8082) "
+            "arquitetura de 2 modelos exige MiniCPM5-1B (8091) e Vocaela (8082) "
             "online; sem fallback programático.")
     return _decide_planner(instruction, ctx, cfg, planner, vocaela)
 
