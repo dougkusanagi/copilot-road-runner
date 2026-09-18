@@ -20,7 +20,7 @@ import math
 _BLUE = "#0078D4"
 _GLOW = ("#0A4E8A", "#0078D4", "#66B2FF")  # halo externo → miolo → núcleo
 _BASE = (10, 6, 3)   # larguras base (externa, meio, interna)
-_AMP = (8, 5, 3)     # amplitude do pulso por camada
+_AMP = 4              # amplitude do pulso (px) aplicada a todas as camadas
 _TEXT = "Este computador está sendo controlado pelo agente   |   Ctrl+Alt+Esc para parar"
 
 _started = False
@@ -41,14 +41,16 @@ def _monitors() -> list[tuple[int, int, int, int]]:
 def _make_click_through(win) -> None:
     """WS_EX_* no HWND TOP-LEVEL (não no filho do Tk — bug do click-through)."""
     import ctypes
+    from ctypes import wintypes
 
     try:
         u = ctypes.windll.user32
+        u.SetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_long]
+        u.SetWindowLongW.restype = ctypes.c_long
         hwnd = u.GetParent(win.winfo_id()) or win.winfo_id()
         ex = u.GetWindowLongW(hwnd, -20)
         # TRANSPARENT (cliques atravessam) | LAYERED | TOOLWINDOW | NOACTIVATE
         u.SetWindowLongW(hwnd, -20, ex | 0x20 | 0x80000 | 0x80 | 0x08000000)
-        u.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 | 0x0040)
     except Exception:
         pass
 
@@ -116,7 +118,15 @@ def show() -> None:
     except Exception:
         pass
     try:  # z-order + posição exata (HWND top-level, não o filho do Tk)
+        from ctypes import wintypes
+
         u = ctypes.windll.user32
+        # c_int assinados: sem isso offsets negativos (monitores acima/esq.)
+        # são truncados p/ unsigned e a janela cai na origem errada.
+        u.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int,
+                                   ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                                   ctypes.c_uint]
+        u.SetWindowPos.restype = wintypes.BOOL
         for (win, _), (x, y, w, h) in zip(wins, _monitors()):
             try:
                 # GetParent: winfo_id() é a janela INTERNA do Tk; mover/posicionar
@@ -131,16 +141,20 @@ def show() -> None:
         _make_click_through(win)
 
     # --- pulso do glow (larguras sobem/descem ~1.7s por ciclo) ----------------
-    def _pulse(phase: int = 0) -> None:
+    def _pulse(phase: int = 0, frames: int = 0) -> None:
         s = (math.sin(phase * math.pi / 14.0) + 1.0) / 2.0  # 0..1
+        big = int(round(_AMP * s))
         for _win, layer_rings in wins:
             for li, ring in enumerate(layer_rings):
-                d = max(2, _BASE[li] + int(round(_AMP * s)))
+                d = max(2, _BASE[li] + big)
                 ring["top"].place_configure(height=d)
                 ring["bottom"].place_configure(height=d)
                 ring["left"].place_configure(width=d)
                 ring["right"].place_configure(width=d)
-        root.after(60, _pulse, (phase + 1) % 10_000)
+            for ring in layer_rings:  # redesenho imediato (sem isso o
+                for fr in ring.values():  # place não repinta a tempo)
+                    fr.update_idletasks()
+        root.after(60, _pulse, (phase + 1) % 10_000, frames + 1)
 
     try:
         root.after(60, _pulse)
