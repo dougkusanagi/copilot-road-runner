@@ -92,12 +92,23 @@ def _deterministic(step: int, instruction: str, ctx: dict) -> Action | None:
             return Action(type="open", target="calc")
         return None  # resto via UIA (Teste 2)
     if _has_any(instruction, BROWSER_WORDS):
-        # máquina de estágios (ctx), não steps: nunca digita sem o browser focado.
+        # Abre o Edge JÁ na URL da busca (confiável: evita autocomplete da
+        # barra de endereços, que re-selecionava sugestão quebrada e dava 404).
+        # O typing continua provado pelo Teste 1 (notepad).
+        import unicodedata
+        from urllib.parse import quote_plus
+
+        from uia import foreground_title as _fg
+
         st = ctx.get("bstage", 0)
+        query = _extract_search_query(instruction) or instruction
         if st == 0:
             if step == 0:
+                ascii_q = unicodedata.normalize("NFKD", query).encode("ascii", "ignore").decode()
+                url = ("https://www.google.com/search?q=" + quote_plus(ascii_q)
+                       if not query.startswith("http") else query)
                 ctx["bstage"] = 1
-                return Action(type="open", target="msedge")
+                return Action(type="open", target=f'msedge "{url}"')
             return None
         if not _focused(BROWSER_TITLES):
             n = ctx.get("bfocus", 0)
@@ -106,26 +117,21 @@ def _deterministic(step: int, instruction: str, ctx: dict) -> Action | None:
                 return Action(type="focus", target="edge||chrome||brave")
             raise RuntimeError("navegador não abriu/não focou; abortando "
                                "para não atuar na janela errada.")
-        if st == 1:
-            ctx["bstage"] = 2
-            return Action(type="hotkey", key="ctrl+l")
-        if st == 2:
-            from urllib.parse import quote_plus
-
-            query = _extract_search_query(instruction)
-            text = query or instruction
-            if not text.startswith("http"):
-                text = "https://www.google.com/search?q=" + quote_plus(text)
-            ctx["bstage"] = 3
-            return Action(type="type", text=text)
-        if st == 3:
-            ctx["bstage"] = 4
-            return Action(type="hotkey", key="enter")
-        # st >= 4: busca submetida. Sem follow-up explícito → done;
-        # com "clique no resultado..." → segue p/ UIA/scorer/VLM.
+        fg = _fg().lower()
+        if any(w in fg for w in ("404", "error", "não é possível", "can't be reached",
+                                 "não pode ser acessada", "err_")):
+            raise RuntimeError(f"página de erro no browser ({fg[:60]!r}); "
+                               "verifique rede/extensões e rode de novo.")
         if _has_any(instruction, FOLLOW_WORDS):
-            return None
-        return Action(type="done")
+            return None  # ex: "clique no resultado" → segue p/ UIA/scorer/VLM
+        probe = [t for t in re.findall(r"\w+", query.lower()) if len(t) > 2][:4]
+        if "google" in fg or "pesquisa" in fg or any(p in fg for p in probe):
+            return Action(type="done")
+        n = ctx.get("bwaits", 0)
+        if n < 3:
+            ctx["bwaits"] = n + 1
+            return Action(type="wait", ms=2000)
+        raise RuntimeError(f"página não confirmou (active={fg[:60]!r}).")
     return None
 
 
@@ -151,6 +157,11 @@ def _done_by_verify(instruction: str, ctx: dict) -> tuple[bool, str]:
         return False, ""
     if _has_any(instruction, BROWSER_WORDS):
         if ctx.get("bstage", 0) >= 4 and _focused(BROWSER_TITLES):
+            from uia import foreground_title as _fg2
+
+            if any(w in _fg2().lower() for w in ("404", "error", "não é possível",
+                                                 "can't be reached", "err_")):
+                return False, ""  # deixa o _deterministic tentar 1 retry
             return True, "browser search submitted"
         return False, ""
     return False, ""
