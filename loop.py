@@ -1,9 +1,11 @@
-"""Loop observe → decide → act → repeat (MVP).
+"""Loop observe → decide → act → verify → repeat (MVP).
 
-Estratégia de decisão (barata primeiro):
-  1. bootstrap determinístico do browser (steps 0-3, se instrução pedir browser/busca)
-  2. UIA pick por palavras-chave (scorer >= 0.6)
-  3. VLM fallback (LM Studio) — pulado com --no-vlm ou se offline
+Ordem de decisão (barata primeiro):
+  1. deterministic tools (open/focus/type por intenção: notepad, calc, browser)
+  2. Windows UI Automation (só janela ativa, formato compacto)
+  3. ActionScorer simples (candidates + threshold 0.80 → executa, senão VLM)
+  4. VLM SÓ como grounding (screenshot + "locate X" → {x,y} 0..1)
+Sem planner grande no MVP.
 """
 from __future__ import annotations
 
@@ -18,12 +20,15 @@ import safety
 from actions import execute
 from obs import downscale_for_vlm, take_screenshot
 from schemas import Action, Decision
-from scorer import THRESHOLD_VLM, pick
-from uia import snapshot
+from scorer import SimpleScorer, build_candidates
+from tools import click_element
+from uia import active_window_snapshot, snapshot
 
 LOG = Path("run.jsonl")
+_scorer = SimpleScorer()
 
-BROWSER_CMDS = ["msedge", "chrome", "brave"]
+NOTEPAD_WORDS = ["notepad", "bloco de notas"]
+CALC_WORDS = ["calculadora", "calculator"]
 BROWSER_WORDS = ["browser", "navegador", "edge", "chrome", "brave", "busque", "buscar",
                  "pesquise", "search", "google"]
 
@@ -33,127 +38,298 @@ def _log(obj: dict) -> None:
         f.write(json.dumps(obj, ensure_ascii=False) + "\n")
 
 
-def _wants_browser(instruction: str) -> bool:
-    ins = instruction.lower()
-    return any(w in ins for w in BROWSER_WORDS)
+def _has_any(ins: str, words: list[str]) -> bool:
+    ins = ins.lower()
+    return any(w in ins for w in words)
+
+
+def _extract_text_to_type(instruction: str) -> str:
+    m = re.search(r"(?:escreva|escrever|write|digite|digitar|type)\s+[\"']?(.+?)[\"']?$",
+                  instruction, re.IGNORECASE)
+    return m.group(1).strip() if m else ""
+
+
+def _extract_digit(instruction: str) -> str:
+    m = re.search(r"\d", instruction)
+    return m.group(0) if m else ""
 
 
 def _extract_search_query(instruction: str) -> str:
-    """Extrai 'X' de padrões como: busque X / pesquise X / search X / buscar 'X'."""
     m = re.search(r"(?:busque|buscar|pesquise|pesquisar|search|procure)\s+[\"']?(.+?)[\"']?$",
                   instruction, re.IGNORECASE)
-    if m:
-        return m.group(1).strip()
-    return ""
+    return m.group(1).strip() if m else ""
 
 
-def _browser_bootstrap(step: int, instruction: str) -> Action | None:
-    """Sequência fixa e rápida: abrir → focar barra (ctrl+l) → digitar busca → enter."""
-    if not _wants_browser(instruction):
+# --- fluxos determinísticos (steps fixos, sem IA) -----------------------------
+def _deterministic(step: int, instruction: str, ctx: dict) -> Action | None:
+    if _has_any(instruction, NOTEPAD_WORDS):
+        if step == 0:
+            return Action(type="open", target="notepad")
+        if step == 1:
+            return Action(type="focus", target="bloco de notas||notepad")
+        if step == 2 and not ctx.get("typed"):
+            text = _extract_text_to_type(instruction)
+            if text:
+                return Action(type="type", text=text)
+            return None  # sem texto claro → cai p/ UIA/VLM
+        if step == 2 and ctx.get("typed"):
+            return Action(type="done")
         return None
-    query = _extract_search_query(instruction)
-    if step == 0:
-        # tenta Edge, cai p/ chrome/brave se preciso (open é fire-and-forget)
-        return Action(type="open", target="msedge")
-    if step == 1:
-        return Action(type="hotkey", key="ctrl+l")
-    if step == 2:
-        text = query or instruction
-        # busca direta no Google se não for URL
-        if not text.startswith("http"):
-            text = f"https://www.google.com/search?q={text.replace(' ', '+')}"
-        return Action(type="type", text=text)
-    if step == 3:
-        return Action(type="hotkey", key="enter")
+    if _has_any(instruction, CALC_WORDS):
+        if step == 0:
+            return Action(type="open", target="calc")
+        return None  # resto via UIA (Teste 2)
+    if _has_any(instruction, BROWSER_WORDS):
+        query = _extract_search_query(instruction)
+        if step == 0:
+            return Action(type="open", target="msedge")
+        if step == 1:
+            return Action(type="hotkey", key="ctrl+l")
+        if step == 2:
+            text = query or instruction
+            if not text.startswith("http"):
+                text = f"https://www.google.com/search?q={text.replace(' ', '+')}"
+            return Action(type="type", text=text)
+        if step == 3:
+            return Action(type="hotkey", key="enter")
+        return None
     return None
 
 
-def _uia_summary(elements) -> str:
-    lines = []
-    for e in elements[:80]:
-        lines.append(f"[{e.control_type}] {e.name!r} aid={e.automation_id!r} "
-                     f"rect={e.rect} d={e.depth}")
-    return "\n".join(lines)
+# --- conclusão por verificação (sem LLM) --------------------------------------
+def _done_by_verify(instruction: str) -> tuple[bool, str]:
+    """Checa objetivo cumprido via UIA. Só p/ testes determinísticos."""
+    if _has_any(instruction, CALC_WORDS):
+        digit = _extract_digit(instruction)
+        if not digit:
+            return False, ""
+        for el in snapshot():
+            if el.automation_id == "CalculatorResults" and digit in (el.name or ""):
+                return True, f"calculator display = {digit}"
+        return False, ""
+    if _has_any(instruction, NOTEPAD_WORDS):
+        text = _extract_text_to_type(instruction)
+        if not text:
+            return False, ""
+        needle = text[:20].lower()
+        for el in snapshot():
+            if needle and needle in (el.name or "").lower():
+                return True, "notepad text verified"
+        return False, ""
+    return False, ""
 
 
-def decide(instruction: str, step: int, use_vlm: bool, lmstudio_url: str) -> Decision:
-    # 1. bootstrap browser (determinístico, confiança alta)
-    boot = _browser_bootstrap(step, instruction)
-    if boot is not None:
-        return Decision(action=boot, source="deterministic", confidence=0.9,
-                        reason="browser bootstrap")
+# --- decide -------------------------------------------------------------------
+def decide(instruction: str, step: int, ctx: dict, cfg: dict) -> tuple[Decision, dict]:
+    t: dict = {}
+    t0 = time.perf_counter()
+    det = _deterministic(step, instruction, ctx)
+    t["tool_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+    if det is not None:
+        src = "deterministic"
+        return Decision(action=det, source=src, confidence=0.99,
+                        reason="deterministic tool"), t
 
-    # 2. UIA: observa e tenta match por palavras relevantes
-    elements = snapshot()
-    words = [w for w in re.findall(r"\w+", instruction.lower()) if len(w) > 3][:6]
-    best, best_s = None, 0.0
-    for w in words:
-        el, s = pick(w, elements)
-        if s > best_s:
-            best, best_s = el, s
-    if best is not None and best_s >= THRESHOLD_VLM:
-        from tools import click_element
+    t1 = time.perf_counter()
+    items, title = active_window_snapshot()
+    t["uia_ms"] = round((time.perf_counter() - t1) * 1000, 1)
+    t["uia_title"] = title
+    t["uia_count"] = len(items)
 
-        return Decision(action=click_element(best), source="uia",
-                        confidence=best_s, reason=f"uia match {best.name!r}")
+    t2 = time.perf_counter()
+    cands = build_candidates(items)
+    scored = _scorer.score(instruction, title, cands)
+    t["scorer_ms"] = round((time.perf_counter() - t2) * 1000, 1)
+    top = scored[0]
+    t["scorer_top"] = top.candidate.label
+    t["scorer_conf"] = top.confidence
 
-    # 3. VLM fallback
-    if use_vlm:
-        from vlm import check_lmstudio, ground_action
+    threshold = float(cfg.get("scorer_threshold", 0.8))
+    if top.confidence >= threshold and top.candidate.kind == "click":
+        b = top.candidate.bounds or [0, 0, 0, 0]
+        cx, cy = (b[0] + b[2]) // 2, (b[1] + b[3]) // 2
+        return Decision(action=Action(type="click", x=cx, y=cy), source="scorer",
+                        confidence=top.confidence,
+                        reason=f'scorer {top.candidate.label}'), t
 
-        status = check_lmstudio(lmstudio_url)
-        if not status.get("ok"):
-            raise RuntimeError(
-                f"sem match UIA (melhor={best_s:.2f}) e LM Studio offline: "
-                f"{status.get('error')}. Suba um modelo vision no LM Studio ou rode com --no-vlm.")
-        from obs import LAST_PNG
+    # VLM: só grounding
+    if ctx.get("no_vlm"):
+        raise RuntimeError(f"top={top.candidate.label} conf={top.confidence:.2f} "
+                           f"< {threshold} e --no-vlm ativo.")
+    from vlm import LMStudioVisionModel, check_server
 
-        b64, vlm_size = downscale_for_vlm(LAST_PNG)
-        _, real = take_screenshot()  # garante last.png atual; barato (~250ms)
-        # re-deriva real_size do screenshot atual
-        act = ground_action(instruction, b64, _uia_summary(elements),
-                            base_url=lmstudio_url, vlm_size=vlm_size, real_size=real)
-        return Decision(action=act, source="vlm", confidence=0.5, reason="vlm fallback")
+    t3 = time.perf_counter()
+    status = check_server(cfg.get("base_url", "http://127.0.0.1:1234/v1"))
+    if not status.get("ok"):
+        raise RuntimeError(f"top={top.candidate.label} conf={top.confidence:.2f} "
+                           f"< {threshold} e servidor offline: {status.get('error')}. "
+                           "Suba o modelo vision ou rode com --no-vlm.")
+    from obs import LAST_PNG
 
-    raise RuntimeError(f"sem match UIA (melhor={best_s:.2f}) e --no-vlm ativo. "
-                       "Refine a instrução ou ative o LM Studio.")
+    b64, _ = downscale_for_vlm(LAST_PNG, max_width=int(cfg.get("screenshot_max_width", 1280)))
+    _, real = take_screenshot()
+    vm = LMStudioVisionModel(base_url=cfg["base_url"], model=cfg.get("vision_model", "MAI-UI-2B"))
+    target = _extract_text_to_type(instruction) or instruction
+    res = vm.locate_sync(b64, f'"{target}" button/element')
+    t["vision_ms"] = round((time.perf_counter() - t3) * 1000, 1)
+    t["vision_calls"] = 1
+    if res.x < 0:
+        raise RuntimeError("VLM não encontrou o elemento (x=-1).")
+    return Decision(action=vm.to_click(res, real), source="vlm",
+                    confidence=res.confidence, reason="vision grounding"), t
 
 
-def run(instruction: str, max_steps: int = 15, use_vlm: bool = True,
-        lmstudio_url: str = "http://localhost:1234/v1") -> None:
-    print(f"instruction: {instruction!r} max_steps={max_steps} vlm={use_vlm}")
-    print("Pressione ESC para abortar. Mouse no canto superior-esquerdo também aborta.")
+# --- verify -------------------------------------------------------------------
+def verify(action: Action, instruction: str, cfg: dict) -> tuple[bool, str]:
+    """Espera curta + re-observa. Best-effort, nunca usa modelo."""
+    time.sleep(max(0, int(cfg.get("verify_wait_ms", 500))) / 1000.0)
+    if safety.stop_requested():
+        return False, "aborted"
+    if _has_any(instruction, CALC_WORDS):
+        digit = _extract_digit(instruction)
+        for el in snapshot():
+            if el.automation_id == "CalculatorResults":
+                ok = bool(digit) and digit in (el.name or "")
+                return ok, f"calculator display = {el.name!r}"
+        return False, "calc results not found"
+    if _has_any(instruction, NOTEPAD_WORDS):
+        text = _extract_text_to_type(instruction)
+        needle = text[:20].lower() if text else ""
+        if needle:
+            for el in snapshot():
+                if needle in (el.name or "").lower():
+                    return True, "notepad text verified"
+        items, title = active_window_snapshot()
+        ok = bool(title)
+        return ok, f"active={title!r} (texto não exposto na UIA)"
+    items, title = active_window_snapshot()
+    return bool(title), f"active={title!r}"
+
+
+def _key(a: Action) -> str:
+    return f"{a.type}:{a.x},{a.y}:{a.text}:{a.key}:{a.target}"
+
+
+# --- run ----------------------------------------------------------------------
+def run(instruction: str, cfg: dict) -> dict:
+    max_steps = int(cfg.get("max_steps", 20))
+    print(f"Task: {instruction}")
+    print("Stop: Ctrl+Alt+Esc (ou ESC) | Ctrl+C no terminal.")
     safety.start()
     if LOG.exists():
         LOG.unlink()
 
-    for step in range(max_steps):
-        if safety.stop_requested():
-            print("abortado via ESC.");
-            _log({"step": step, "event": "aborted"});
-            break
-        t0 = time.perf_counter()
-        path, real_size = take_screenshot()
-        try:
-            dec = decide(instruction, step, use_vlm, lmstudio_url)
-        except RuntimeError as e:
-            print(f"[step {step}] PARADO: {e}");
-            _log({"step": step, "event": "stuck", "error": str(e)});
-            break
-        desc = execute(dec.action)
-        dt = (time.perf_counter() - t0) * 1000
-        entry = {"step": step, "source": dec.source, "confidence": dec.confidence,
-                 "reason": dec.reason, "did": desc,
-                 "action": dec.action.model_dump(), "ms": round(dt, 1),
-                 "cpu": psutil.cpu_percent(interval=None),
-                 "mem": round(psutil.virtual_memory().percent, 1)}
-        _log(entry)
-        print(f"[step {step}] {dec.source}:{desc} ({dt:.0f}ms) — {dec.reason}")
-        if dec.action.type == "done":
-            print("tarefa concluída (VLM retornou done).");
-            break
-        time.sleep(0.5)
-    else:
-        print("max_steps atingido.")
-    safety.stop()
+    ctx: dict = {"no_vlm": bool(cfg.get("no_vlm", False))}
+    metrics = {"tool_ms": 0.0, "uia_ms": 0.0, "scorer_ms": 0.0, "vision_ms": 0.0,
+               "execution_ms": 0.0, "vision_calls": 0, "steps": 0}
+    history: list[str] = []
+    forced_vision = False
+    n = 0
+    total0 = time.perf_counter()
+    result = "stopped"
+
+    def emit(layer: str, msg: str, ms) -> None:
+        nonlocal n
+        n += 1
+        print(f"[{n}] {layer:<7} {msg} {ms}" if ms != "" else f"[{n}] {layer:<7} {msg}")
+
+    try:
+        for step in range(max_steps):
+            if safety.stop_requested():
+                _log({"step": step, "event": "aborted"})
+                result = "aborted"
+                break
+            s0 = time.perf_counter()
+            path, real_size = take_screenshot()
+
+            done, note = _done_by_verify(instruction)
+            if done:
+                emit("VERIFY", note, "")
+                result = "done"
+                break
+
+            try:
+                dec, tm = decide(instruction, step, ctx, cfg)
+            except RuntimeError as e:
+                print(f"PARADO step {step}: {e}")
+                _log({"step": step, "event": "stuck", "error": str(e)})
+                result = "stuck"
+                break
+
+            metrics["tool_ms"] += tm.get("tool_ms", 0)
+            metrics["uia_ms"] += tm.get("uia_ms", 0)
+            metrics["scorer_ms"] += tm.get("scorer_ms", 0)
+            metrics["vision_ms"] += tm.get("vision_ms", 0)
+            metrics["vision_calls"] += tm.get("vision_calls", 0)
+
+            if dec.source == "deterministic":
+                a = dec.action
+                arg = a.target or a.text or a.key or ""
+                emit("TOOL", f'{a.type}("{arg}")', f'{tm.get("tool_ms", 0):.0f} ms')
+            else:
+                emit("UIA", f'found {tm.get("uia_count", 0)} ("{tm.get("uia_title", "")}")',
+                     f'{tm.get("uia_ms", 0):.0f} ms')
+                if dec.source == "scorer":
+                    emit("SCORER", f'{tm.get("scorer_top")}',
+                         f'{tm.get("scorer_ms", 0):.0f} ms | confidence {dec.confidence:.2f}')
+                else:
+                    emit("VLM", f'grounding ({dec.reason})',
+                         f'{tm.get("vision_ms", 0):.0f} ms | confidence {dec.confidence:.2f}')
+
+            # anti-loop: mesma ação 3× → força vision 1×; se persistir → stop
+            k = _key(dec.action)
+            history.append(k)
+            if len(history) >= 3 and history[-1] == history[-2] == history[-3]:
+                if not forced_vision and not ctx.get("no_vlm"):
+                    print("mesma ação 3× → forçando vision fallback 1×")
+                    forced_vision = True
+                    history.clear()
+                    continue
+                print("loop persistente → stop.")
+                _log({"step": step, "event": "loop"})
+                result = "loop"
+                break
+
+            e0 = time.perf_counter()
+            desc = execute(dec.action)
+            exec_ms = (time.perf_counter() - e0) * 1000
+            metrics["execution_ms"] += exec_ms
+            emit("EXEC", desc, f"{exec_ms:.0f} ms")
+
+            if dec.action.type == "type" and _has_any(instruction, NOTEPAD_WORDS):
+                ctx["typed"] = True
+            if dec.action.type == "done":
+                result = "done"
+                break
+
+            ok, vnote = verify(dec.action, instruction, cfg)
+            emit("VERIFY", vnote, "")
+            if dec.action.type == "type" and _has_any(instruction, NOTEPAD_WORDS):
+                ctx["typed"] = ok or ctx.get("typed", False)
+            metrics["steps"] += 1
+            _log({"step": step, "source": dec.source, "confidence": dec.confidence,
+                  "reason": dec.reason, "did": desc, "action": dec.action.model_dump(),
+                  "verify": vnote, "timings": tm,
+                  "cpu": psutil.cpu_percent(interval=None),
+                  "mem": round(psutil.virtual_memory().percent, 1)})
+            time.sleep(0.3)
+        else:
+            result = "max_steps"
+    except KeyboardInterrupt:
+        result = "aborted"
+        print("\nabortado via Ctrl+C.")
+    finally:
+        safety.stop()
+
+    total_ms = (time.perf_counter() - total0) * 1000
+    print(f"\n{result.upper()}")
+    print(f"Total: {total_ms / 1000:.1f}s")
+    summary = {"test": instruction, "result": result, "steps": metrics["steps"],
+               "vision_calls": metrics["vision_calls"],
+               "total_s": round(total_ms / 1000, 1), "metrics_ms": {
+                   "tool": round(metrics["tool_ms"], 1), "uia": round(metrics["uia_ms"], 1),
+                   "scorer": round(metrics["scorer_ms"], 1),
+                   "vision": round(metrics["vision_ms"], 1),
+                   "exec": round(metrics["execution_ms"], 1)}}
     print(f"log em {LOG}")
+    return summary

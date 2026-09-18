@@ -5,8 +5,9 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-ActionType = Literal["click", "type", "scroll", "hotkey", "open", "done"]
-SourceType = Literal["deterministic", "uia", "vlm"]
+ActionType = Literal["click", "double_click", "right_click", "move", "drag", "type",
+                      "scroll", "hotkey", "open", "focus", "wait", "done"]
+SourceType = Literal["deterministic", "uia", "scorer", "vlm"]
 
 
 class UIElement(BaseModel):
@@ -26,9 +27,12 @@ class Action(BaseModel):
     type: ActionType
     x: int | None = None
     y: int | None = None
+    x2: int | None = None  # p/ drag: destino
+    y2: int | None = None
     text: str | None = None
     key: str | None = None  # p/ hotkey: "enter", "ctrl+l", ...
-    target: str | None = None  # p/ open: comando/app
+    target: str | None = None  # p/ open: comando/app; p/ focus: substring do título
+    ms: int = 0  # p/ wait
     clicks: int = 1
 
 

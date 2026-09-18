@@ -8,8 +8,8 @@ import mss
 from PIL import Image
 
 LAST_PNG = Path("last.png")
-# Largura máxima enviada ao VLM (LM Studio). Mantém loop rápido e barato.
-VLM_MAX_WIDTH = 960
+# Largura máxima enviada ao VLM. Configurável via config.json (screenshot_max_width).
+VLM_MAX_WIDTH = 1280
 
 
 def take_screenshot(

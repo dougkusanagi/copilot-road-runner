@@ -1,0 +1,9 @@
+{
+  "base_url": "http://127.0.0.1:1234/v1",
+  "vision_model": "MAI-UI-2B",
+  "max_steps": 20,
+  "scorer_threshold": 0.8,
+  "screenshot_max_width": 1280,
+  "verify_wait_ms": 500,
+  "stop_hotkey": "ctrl+alt+esc"
+}
