@@ -5,7 +5,8 @@ __pycache__/
 last.png
 run.jsonl
 run-*/
-config.vm.json
+config.sandbox.json
+sandbox/crr.local.wsb
 debug/
 dist/
 build/
