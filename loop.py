@@ -1,19 +1,18 @@
-"""Loop observe -> decide -> act -> verify -> repeat (2 modelos).
+"""Loop observe -> decide -> act -> verify -> repeat (2 modelos, decisão 100% IA).
 
 Arquitetura:
   MiniCPM5-1B = pensar (só texto compacto; nunca recebe screenshots,
                 nunca emite coordenadas)
   Vocaela-2-500M = enxergar (screenshot + instrução curta -> ação visual 0..1)
-  Python = executar (tools determinísticas, UIA, mouse/teclado)
+  Python = executar (tools, UIA, mouse/teclado) — NUNCA decide.
 
-Ordem de decisão (barata primeiro):
-  1. native tool      (open/focus/type decididos pelo planner ou fallback)
+Ordem de decisão (barata primeiro), todas vindas do planner:
+  1. native tool      (open/focus/type decididos pelo planner)
   2. UI Automation    (uia_click por NOME; Vocaela nunca é chamado à toa)
   3. Vocaela          (SÓ quando o elemento não está na accessibility tree)
 
-Planner offline (--no-planner ou servidor fora do ar) -> fallback
-determinístico honesto (router+scorer legados, marcados source="fallback").
-scorer/MAI-UI/VLM antigo NÃO estão no fluxo principal; vivem só no fallback.
+Sem router determinístico, sem scorer, sem conclusão programática de "done":
+se os modelos não estiverem online, o agente para com erro honesto.
 """
 from __future__ import annotations
 
@@ -29,18 +28,12 @@ from actions import execute
 from obs import capture_for_vision
 from planner import MiniCPMPlanner, PlannerDecision
 from schemas import Action, Decision
-from tools import click_element  # noqa: F401  (compat; usado pelo fallback)
-from uia import active_window_snapshot, foreground_title, snapshot
+from uia import active_window_snapshot, foreground_title  # foreground_title: guard calc
 from vocaela import VocaelaAdapter, visual_to_action
 
 LOG = Path("run.jsonl")
 
-NOTEPAD_WORDS = ["notepad", "bloco de notas"]
 CALC_WORDS = ["calculadora", "calculator"]
-BROWSER_WORDS = ["browser", "navegador", "edge", "chrome", "brave", "busque", "buscar",
-                 "pesquise", "search", "google"]
-BROWSER_TITLES = ["edge", "chrome", "brave", "google", "nova guia", "new tab"]
-FOLLOW_WORDS = ["clique", "click", "resultado", "result", "primeiro", "link"]
 
 _JUNK_TYPES = {"window", "titlebar", "menubar"}
 _CHROME_PREFIXES = ("minimizar ", "maximizar ", "restaurar ", "fechar ",
@@ -244,53 +237,25 @@ def _decide_planner(instruction: str, ctx: dict, cfg: dict,
 def decide(instruction: str, step: int, ctx: dict, cfg: dict,
            planner: MiniCPMPlanner | None = None,
            vocaela: VocaelaAdapter | None = None) -> tuple[Decision, dict]:
-    if planner is not None and vocaela is not None and not ctx.get("force_fallback"):
-        try:
-            return _decide_planner(instruction, ctx, cfg, planner, vocaela)
-        except RuntimeError as e:
-            n = ctx.get("planner_errors", 0)
-            ctx["last_error"] = str(e)[:300]
-            if n >= 3:
-                ctx["force_fallback"] = True
-                print("planner falhou 3x -> fallback determinístico até o fim.")
-                return _decide_fallback(instruction, step, ctx, cfg)
-            raise
-    return _decide_fallback(instruction, step, ctx, cfg)
+    """TODA decisão vem dos modelos. Sem planner -> erro honesto (sem router)."""
+    if planner is None or vocaela is None:
+        raise RuntimeError(
+            "arquitetura de 2 modelos exige MiniCPM5-1B (8081) e Vocaela (8082) "
+            "online; sem fallback programático.")
+    return _decide_planner(instruction, ctx, cfg, planner, vocaela)
 
 
-# --- verify -------------------------------------------------------------------
+# --- verify: observação passiva (NUNCA decide ação nem done) -------------------
 def verify(action: Action, instruction: str, cfg: dict) -> tuple[bool, str]:
-    """Espera curta + re-observa. Best-effort, nunca usa modelo."""
+    """Espera curta + título da janela ativa, só p/ log. Não decide nada."""
     time.sleep(max(0, int(cfg.get("verify_wait_ms", 500))) / 1000.0)
     if safety.stop_requested():
         return False, "aborted"
-    if _has_any(instruction, CALC_WORDS):
-        digit = _extract_digit(instruction)
-        for el in snapshot():
-            if el.automation_id == "CalculatorResults":
-                ok = bool(digit) and digit in (el.name or "")
-                return ok, f"calculator display = {el.name!r}"
-        return False, "calc results not found"
-    if _has_any(instruction, NOTEPAD_WORDS):
-        fg = foreground_title()
-        ok = "bloco de notas" in fg.lower() or "notepad" in fg.lower()
-        if not ok:
-            return False, f"foco fora do notepad: active={fg!r} (retry)"
-        text = _extract_text_to_type(instruction)
-        needle = text[:20].lower() if text else ""
-        if needle:
-            for el in snapshot():
-                if needle in (el.name or "").lower():
-                    return True, "notepad text verified"
-        return True, f"typed, active={fg!r} (texto não exposto na UIA)"
-    if _has_any(instruction, BROWSER_WORDS):
-        fg = foreground_title()
-        ok = _focused(BROWSER_TITLES)
-        return ok, f"browser active={fg!r}" if ok else f"foco fora do browser: active={fg!r}"
     items, title, _ = active_window_snapshot()
     return bool(title), f"active={title!r}"
 
 
+# --- verify -------------------------------------------------------------------
 def _key(a: Action) -> str:
     return f"{a.type}:{a.x},{a.y}:{a.text}:{a.key}:{a.target}"
 
@@ -324,33 +289,36 @@ def run(instruction: str, cfg: dict) -> dict:
     if LOG.exists():
         LOG.unlink()
 
-    # --- sobe os dois modelos (probe honesto, sem travar) ---
-    planner = vocaela = None
-    mode = "fallback"
-    if not cfg.get("no_planner"):
-        pc = cfg.get("planner", {})
-        planner = MiniCPMPlanner(base_url=pc.get("base_url", "http://127.0.0.1:8081/v1"),
-                                 model=pc.get("model", "MiniCPM5-1B"),
-                                 temperature=float(pc.get("temperature", 0.1)),
-                                 timeout_s=float(pc.get("timeout_s", 90)))
-        st = planner.check()
-        if st.get("ok"):
-            vc = cfg.get("vision", {})
-            vocaela = VocaelaAdapter(
-                base_url=vc.get("base_url", "http://127.0.0.1:8082/v1"),
-                model=vc.get("model", "Vocaela-2-500M-1024R2"),
-                timeout_s=float(vc.get("timeout_s", 180)),
-                max_long_edge=int(cfg.get("screenshot_max_width", 1024)))
-            mode = "planner"
-            print(f"Planner: MiniCPM ({planner.base_url} modelos={st.get('models')})")
-            vs = vocaela.check()
-            print(f"Visão: Vocaela ({vocaela.base_url} "
-                  f"{'ok' if vs.get('ok') else 'OFFLINE: ' + str(vs.get('error'))[:80]})")
-        else:
-            print(f"Planner offline ({st.get('error')}) -> fallback determinístico.")
-            planner = None
-    else:
-        print("Planner desativado (--no-planner) -> fallback determinístico.")
+    # --- sobe os dois modelos: OBRIGATÓRIOS (decisão 100% por modelos) ---
+    pc = cfg.get("planner", {})
+    planner = MiniCPMPlanner(base_url=pc.get("base_url", "http://127.0.0.1:8081/v1"),
+                             model=pc.get("model", "MiniCPM5-1B"),
+                             temperature=float(pc.get("temperature", 0.1)),
+                             timeout_s=float(pc.get("timeout_s", 90)))
+    st = planner.check()
+    if not st.get("ok"):
+        print(f"Planner MiniCPM5-1B OFFLINE: {st.get('error')}")
+        print("Suba o planner (llama-server em 8081) e rode de novo. "
+              "Sem fallback programático: os modelos decidem.")
+        _log({"event": "no_model", "planner": str(st.get("error"))[:200]})
+        safety.stop()
+        return {"test": instruction, "result": "no_model", "mode": "planner-only",
+                "steps": 0, "planner_calls": 0, "vocaela_calls": 0}
+    vc = cfg.get("vision", {})
+    vocaela = VocaelaAdapter(
+        base_url=vc.get("base_url", "http://127.0.0.1:8082/v1"),
+        model=vc.get("model", "Vocaela-2-500M-1024R2"),
+        timeout_s=float(vc.get("timeout_s", 180)),
+        max_long_edge=int(cfg.get("screenshot_max_width", 1024)))
+    vs = vocaela.check()
+    if not vs.get("ok") and not cfg.get("no_vision"):
+        print(f"Vocaela OFFLINE ({vs.get('error')}); visual_action vai falhar — "
+              "suba o llama-server do Vocaela em 8082.")
+    mode = "planner"
+    print(f"Planner: MiniCPM ({planner.base_url} modelos={st.get('models')})")
+    vs2 = vocaela.check()
+    print(f"Visão: Vocaela ({vocaela.base_url} "
+          f"{'ok' if vs2.get('ok') else 'OFFLINE: ' + str(vs2.get('error'))[:80]})")
 
     ctx: dict = {"no_vision": bool(cfg.get("no_vision", cfg.get("no_vlm", False))),
                  "hist_labels": []}
@@ -376,25 +344,23 @@ def run(instruction: str, cfg: dict) -> dict:
                 break
             s0 = time.perf_counter()
 
-            done, note = _done_by_verify(instruction, ctx)
-            if done:
-                emit("VERIFY", note, "")
-                result = "done"
-                break
-
             try:
                 dec, tm = decide(instruction, step, ctx, cfg, planner, vocaela)
             except RuntimeError as e:
-                if ctx.get("force_fallback") or planner is None:
-                    print(f"PARADO step {step}: {e}")
-                    _log({"step": step, "event": "stuck", "error": str(e)})
+                # erro do planner/vocaela: alimenta last_error, retenta até 3x
+                n = ctx.get("decide_errors", 0) + 1
+                ctx["decide_errors"] = n
+                ctx["last_error"] = str(e)[:300]
+                if n > 3:
+                    print(f"PARADO step {step}: decisao falhou 4x: {e}")
+                    _log({"step": step, "event": "stuck", "error": str(e)[:300]})
                     result = "stuck"
                     break
-                # erro transitório do planner/vocaela: alimenta last_error e tenta
-                print(f"[retry] step {step}: {e}")
-                _log({"step": step, "event": "retry", "error": str(e)})
+                print(f"[retry {n}/3] step {step}: {e}")
+                _log({"step": step, "event": "retry", "error": str(e)[:300]})
                 time.sleep(0.5)
                 continue
+            ctx["decide_errors"] = 0
 
             metrics["planner_ms"] += tm.get("planner_ms", 0) + tm.get("tool_ms", 0)
             metrics["uia_ms"] += tm.get("uia_ms", 0)
@@ -404,13 +370,12 @@ def run(instruction: str, cfg: dict) -> dict:
             metrics["planner_calls"] += tm.get("planner_calls", 0)
 
             src = dec.source
-            if src in ("planner", "fallback") and dec.action.type in (
+            if src == "planner" and dec.action.type in (
                     "open", "focus", "type", "hotkey", "wait", "done"):
                 a = dec.action
                 arg = a.target or a.text or a.key or ""
-                layer = "PLANNER" if src == "planner" else "TOOL"
-                emit(layer, f'{a.type}("{arg}")',
-                     f'{tm.get("planner_ms", tm.get("tool_ms", 0)):.0f}ms')
+                emit("PLANNER", f'{a.type}("{arg}")',
+                     f'{tm.get("planner_ms", 0):.0f}ms')
             else:
                 if tm.get("uia_count") is not None:
                     emit("UIA", f'found {tm.get("uia_count", 0)} '
@@ -447,14 +412,6 @@ def run(instruction: str, cfg: dict) -> dict:
                 break
 
             e0 = time.perf_counter()
-            # fecha TOCTOU: toast pode roubar o foco entre decide e execute;
-            # reafirma o foco imediatamente antes de digitar.
-            if dec.action.type == "type" and _has_any(instruction, NOTEPAD_WORDS):
-                from tools import focus_window as _fw
-                _fw("bloco de notas||notepad", timeout=3.0)
-            if dec.action.type == "type" and _has_any(instruction, BROWSER_WORDS):
-                from tools import focus_window as _fw
-                _fw("edge||chrome||brave", timeout=3.0)
             try:
                 desc = execute(dec.action)
             except (ValueError, AssertionError) as e:
@@ -474,16 +431,12 @@ def run(instruction: str, cfg: dict) -> dict:
                          f" -> {va.get('type')}({va.get('x')},{va.get('y')})")
             ctx["hist_labels"].append(label)
 
-            if dec.action.type == "type" and _has_any(instruction, NOTEPAD_WORDS):
-                ctx["typed"] = True
             if dec.action.type == "done":
                 result = "done"
                 break
 
             ok, vnote = verify(dec.action, instruction, cfg)
             emit("VERIFY", vnote, "")
-            if dec.action.type == "type" and _has_any(instruction, NOTEPAD_WORDS):
-                ctx["typed"] = ok or ctx.get("typed", False)
             metrics["steps"] += 1
             _log({"step": step, "source": dec.source, "confidence": dec.confidence,
                   "reason": dec.reason, "did": desc, "action": dec.action.model_dump(),

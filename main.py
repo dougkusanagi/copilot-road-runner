@@ -1,8 +1,8 @@
-"""CLI: python main.py  →  > Abra o Notepad e escreva Hello World
+﻿"""CLI: python main.py  â†’  > Abra o Notepad e escreva Hello World
 
 Arquitetura de 2 modelos (config.json):
-  planner MiniCPM5-1B  http://127.0.0.1:8081/v1  (texto, sem screenshots)
-  visão   Vocaela-2    http://127.0.0.1:8082/v1  (screenshot → ação visual)
+  planner MiniCPM5-1B  http://127.0.0.1:8091/v1  (texto, sem screenshots)
+  visÃ£o   Vocaela-2    http://127.0.0.1:8082/v1  (screenshot â†’ aÃ§Ã£o visual)
 """
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ import psutil
 
 import config as cfgmod
 
-# Console Windows pode estar em cp1252: nunca quebrar por unicode (→, ç, ã...).
+# Console Windows pode estar em cp1252: nunca quebrar por unicode (â†’, Ã§, Ã£...).
 for _s in (sys.stdout, sys.stderr):
     try:
         if _s and _s.encoding and _s.encoding.lower() not in ("utf-8", "utf8"):
@@ -25,7 +25,7 @@ for _s in (sys.stdout, sys.stderr):
 
 
 def locate_only(target: str, cfg: dict) -> None:
-    """Dry-run do grounding Vocaela: screenshot → act → imprime, sem clicar."""
+    """Dry-run do grounding Vocaela: screenshot â†’ act â†’ imprime, sem clicar."""
     from obs import capture_for_vision
     from vocaela import VocaelaAdapter, visual_to_action
 
@@ -49,14 +49,10 @@ def locate_only(target: str, cfg: dict) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Computer Use local (MiniCPM5-1B + Vocaela-2)")
-    ap.add_argument("instruction", nargs="?", default="", help="instrução do usuário")
+    ap.add_argument("instruction", nargs="?", default="", help="instruÃ§Ã£o do usuÃ¡rio")
     ap.add_argument("--config", default="config.json")
     ap.add_argument("--max-steps", type=int, default=None)
-    ap.add_argument("--self-test", action="store_true", help="só testa screenshot + métricas, sem clicar")
-    ap.add_argument("--no-planner", action="store_true",
-                    help="não usa MiniCPM (fallback determinístico+UIA)")
-    ap.add_argument("--no-vision", "--no-vlm", dest="no_vision", action="store_true",
-                    help="desativa Vocaela (sem branch visual)")
+    ap.add_argument("--self-test", action="store_true", help="sÃ³ testa screenshot + mÃ©tricas, sem clicar")
     ap.add_argument("--planner-url", default=None, help="override de planner.base_url")
     ap.add_argument("--vision-url", default=None, help="override de vision.base_url")
     ap.add_argument("--lmstudio-url", default=None,
@@ -67,10 +63,6 @@ def main() -> None:
     cfg = cfgmod.load(args.config)
     if args.max_steps is not None:
         cfg["max_steps"] = args.max_steps
-    if args.no_planner:
-        cfg["no_planner"] = True
-    if args.no_vision:
-        cfg["no_vision"] = True
     if args.planner_url:
         cfg["planner"]["base_url"] = args.planner_url
     if args.vision_url:
@@ -112,7 +104,7 @@ def main() -> None:
             print()
             return
     if not instruction:
-        print("instrução vazia.")
+        print("instruÃ§Ã£o vazia.")
         raise SystemExit(2)
 
     from loop import run

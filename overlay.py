@@ -1,12 +1,26 @@
-"""Overlay de controle: borda azul + aviso, estilo Quick Assist/Teams.
+"""Overlay de controle: GLOW pulsante em volta de cada monitor + aviso.
 
-Fullscreen por monitor, click-through (WS_EX_TRANSPARENT), sempre no topo.
+Estilo apps de uso remoto (Quick Assist / Teams / indicador do Codex):
+borda azul brilhante em camadas (halo escuro → núcleo claro) pulsando,
+fullscreen por monitor, click-through (WS_EX_TRANSPARENT), sempre no topo.
+
+Fixes vs versão anterior:
+- winfo_id() do Tk devolve a janela INTERNA; os estilos WS_EX_* (click-through)
+  precisam ir no HWND top-level (GetParent) — era a causa de o overlay bloquear
+  interação/nao comportar-se como overlay em alguns monitores.
+- Glow em 3 camadas por lado, com pulso via after() — em TODOS os monitores
+  (EnumDisplayMonitors/mss cobre offsets negativos via SetWindowPos exato).
+
 Falha silenciosa (retorna False) se tkinter indisponível — nunca bloqueia o MVP.
 """
 from __future__ import annotations
 
+import math
+
 _BLUE = "#0078D4"
-_BW = 7
+_GLOW = ("#0A4E8A", "#0078D4", "#66B2FF")  # halo externo → miolo → núcleo
+_BASE = (10, 6, 3)   # larguras base (externa, meio, interna)
+_AMP = (8, 5, 3)     # amplitude do pulso por camada
 _TEXT = "Este computador está sendo controlado pelo agente   |   Ctrl+Alt+Esc para parar"
 
 _started = False
@@ -24,13 +38,31 @@ def _monitors() -> list[tuple[int, int, int, int]]:
         return [(0, 0, 1920, 1080)]
 
 
-def show() -> None:
-    """Bloqueante: mostra o overlay na thread principal (rode em processo próprio)."""
-    import tkinter as tk
+def _make_click_through(win) -> None:
+    """WS_EX_* no HWND TOP-LEVEL (não no filho do Tk — bug do click-through)."""
     import ctypes
 
-    wins = []
-    for i, (x, y, w, h) in enumerate(_monitors()):
+    try:
+        u = ctypes.windll.user32
+        hwnd = u.GetParent(win.winfo_id()) or win.winfo_id()
+        ex = u.GetWindowLongW(hwnd, -20)
+        # TRANSPARENT (cliques atravessam) | LAYERED | TOOLWINDOW | NOACTIVATE
+        u.SetWindowLongW(hwnd, -20, ex | 0x20 | 0x80000 | 0x80 | 0x08000000)
+        u.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 | 0x0040)
+    except Exception:
+        pass
+
+
+def show() -> None:
+    """Bloqueante: mostra o overlay na thread principal (rode em processo próprio)."""
+    import ctypes
+    import math
+    import tkinter as tk
+
+    mons = _monitors()
+    wins: list[tuple] = []  # [(win, layers)] — layers = 3 anéis × 4 lados
+    root = None
+    for i, (x, y, w, h) in enumerate(mons):
         win = tk.Tk() if i == 0 else tk.Toplevel()
         if i == 0:
             root = win
@@ -44,30 +76,74 @@ def show() -> None:
             win.attributes("-transparentcolor", "black")
         except Exception:
             pass
-        try:  # click-through: cliques atravessam o overlay
-            hwnd = win.winfo_id()
-            u = ctypes.windll.user32
-            ex = u.GetWindowLongW(hwnd, -20)
-            u.SetWindowLongW(hwnd, -20, ex | 0x20 | 0x80000 | 0x08000000)
-        except Exception:
-            pass
-        bar = {"bg": _BLUE, "bd": 0, "highlightthickness": 0}
-        tk.Frame(win, **bar).place(x=0, y=0, relwidth=1, height=_BW)
-        tk.Frame(win, **bar).place(x=0, rely=1.0, y=-_BW, relwidth=1, height=_BW)
-        tk.Frame(win, **bar).place(x=0, y=0, width=_BW, relheight=1)
-        tk.Frame(win, **bar).place(relx=1.0, x=-_BW, y=0, width=_BW, relheight=1)
+        # glow: 3 camadas por lado (escura externa → clara interna). O pulso
+        # anima as larguras via place_configure no loop after() abaixo.
+        layers: list[dict[str, tk.Frame]] = []
+        for layer in range(3):
+            ring = {
+                "top": tk.Frame(win, bd=0, highlightthickness=0),
+                "bottom": tk.Frame(win, bd=0, highlightthickness=0),
+                "left": tk.Frame(win, bd=0, highlightthickness=0),
+                "right": tk.Frame(win, bd=0, highlightthickness=0),
+            }
+            for side, fr in ring.items():
+                fr.configure(bg=_GLOW[layer])
+                if side == "top":
+                    fr.place(x=0, y=0, relwidth=1, height=_BASE[layer])
+                elif side == "bottom":
+                    fr.place(x=0, rely=1.0, y=-_BASE[layer], relwidth=1,
+                             height=_BASE[layer])
+                elif side == "left":
+                    fr.place(x=0, y=0, width=_BASE[layer], relheight=1)
+                else:
+                    fr.place(relx=1.0, x=-_BASE[layer], y=0, width=_BASE[layer],
+                             relheight=1)
+            layers.append(ring)
         banner = tk.Label(win, text=_TEXT, bg=_BLUE, fg="white",
                           font=("Segoe UI", 11, "bold"), padx=14, pady=6)
-        banner.place(relx=0.5, y=_BW + 2, anchor="n")
-        wins.append(win)
-    try:  # posicionamento exato por monitor (cobre offsets negativos)
+        banner.place(relx=0.5, y=_BASE[0] + 2, anchor="n")
+        wins.append((win, layers))
+    # posicionamento exato por monitor (cobre offsets negativos).
+    # ORDEM IMPORTA: geometry do Tk reaplica o tamanho/posição no update();
+    # por isso o SetWindowPos vem DEPOIS do último update() e nada mais
+    # mexe em geometria da janela depois (só frames internos no pulso).
+    try:
         root.update_idletasks()
+    except Exception:
+        pass
+    try:
+        root.update()
+    except Exception:
+        pass
+    try:  # z-order + posição exata (HWND top-level, não o filho do Tk)
         u = ctypes.windll.user32
-        for win, (x, y, w, h) in zip(wins, _monitors()):
+        for (win, _), (x, y, w, h) in zip(wins, _monitors()):
             try:
-                u.SetWindowPos(win.winfo_id(), -1, x, y, w, h, 0x0010 | 0x0040)
+                # GetParent: winfo_id() é a janela INTERNA do Tk; mover/posicionar
+                # deve mirar o HWND top-level (mesma correção do click-through).
+                hwnd = u.GetParent(win.winfo_id()) or win.winfo_id()
+                u.SetWindowPos(hwnd, -1, x, y, w, h, 0x0010 | 0x0040)
             except Exception:
                 pass
+    except Exception:
+        pass
+    for win, _ in wins:
+        _make_click_through(win)
+
+    # --- pulso do glow (larguras sobem/descem ~1.7s por ciclo) ----------------
+    def _pulse(phase: int = 0) -> None:
+        s = (math.sin(phase * math.pi / 14.0) + 1.0) / 2.0  # 0..1
+        for _win, layer_rings in wins:
+            for li, ring in enumerate(layer_rings):
+                d = max(2, _BASE[li] + int(round(_AMP * s)))
+                ring["top"].place_configure(height=d)
+                ring["bottom"].place_configure(height=d)
+                ring["left"].place_configure(width=d)
+                ring["right"].place_configure(width=d)
+        root.after(60, _pulse, (phase + 1) % 10_000)
+
+    try:
+        root.after(60, _pulse)
     except Exception:
         pass
     root.mainloop()
