@@ -72,9 +72,13 @@ class TestVmScripts(unittest.TestCase):
                        "EnableEnhancedSessionMode",  # copy/paste console
                        'Checkpoint-VM -Name $VmName -SnapshotName "clean"',
                        "Remove-VMSnapshot",  # re-criar clean sem duplicar
+                       "Get-VMIntegrationService",  # best-effort, sem abortar
                        "Get-VM -Name $VmName",  # nunca duplica
                        "New-VHD", "New-VM -Name $VmName -Generation 2"):
             self.assertIn(needle, src, f"trecho ausente: {needle}")
+        # sem Enable duro que aborta o script se o nome do servico variar
+        self.assertNotIn('Enable-VMIntegrationService -VMName $VmName -Name "Guest Service Interface"',
+                         src)
 
     def test_reset_testvm(self):
         src = RESET_VM.read_text(encoding="utf-8")

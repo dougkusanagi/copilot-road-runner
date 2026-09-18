@@ -75,7 +75,17 @@ if (-not $vm) {
             -VHDPath $vhd -SwitchName $SwitchName
         Set-VMProcessor -VMName $VmName -Count $CpuCount
         Set-VM -Name $VmName -AutomaticCheckpointsEnabled $false -CheckpointType Standard
-        Enable-VMIntegrationService -VMName $VmName -Name "Guest Service Interface"
+        # Guest Service Interface (copy/paste de arquivos): best-effort.
+        # Nome varia conforme build/idioma e pode nao existir p/ VM recem-criada.
+        try {
+            $svc = Get-VMIntegrationService -VMName $VmName -ErrorAction Stop | Where-Object {
+                $_.Name -match "Guest Service|Convidado|File Copy|Copia de"
+            } | Select-Object -First 1
+            if ($svc) { Enable-VMIntegrationService -VM $svc.VM -Name $svc.Name }
+            else { Write-Warning "Guest Service Interface nao encontrado; pule (copy/paste via Enhanced Session segue OK)." }
+        } catch {
+            Write-Warning ("Falha ao habilitar Guest Service Interface (ignorado): {0}" -f $_.Exception.Message)
+        }
     }
 }
 else {
