@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+.uv/
+last.png
+run.jsonl
+debug/
+dist/
+build/
+*.egg-info/
