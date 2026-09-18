@@ -57,6 +57,38 @@ Fechou o Sandbox, tudo é descartado — abra de novo para a próxima bateria li
 | `sandbox\bootstrap.ps1` | setup automático dentro do Sandbox (Python+uv+config) |
 | `sandbox\config.sandbox.example.json` | modelo versionado; `config.sandbox.json` é local e ignorado |
 | `sandbox\crr.local.wsb` | gerado por máquina; nunca commitar |
+| `scripts\Invoke-SandboxTest.ps1` | host: roda um comando no Sandbox e devolve o resultado (uso do agente) |
+| `sandbox\agent.ps1` | runner dentro do Sandbox: executa o job e grava o resultado |
+| `.sandbox-job\` | inbox/outbox dos jobs; local, ignorado pelo git |
+
+## Testes executados pelo agente (eu rodo no Sandbox)
+
+O Sandbox não expõe WinRM/SSH, então o canal é pasta mapeada:
+o host escreve o comando, o `agent.ps1` (via `LogonCommand`) executa
+e o host aguarda o `done.marker`.
+
+```powershell
+# prova o canal (rápido, sem instalar nada)
+.\scripts\Invoke-SandboxTest.ps1 -Command "whoami"
+
+# bateria completa com Python+uv (primeira vez demora minutos: winget)
+.\scripts\Invoke-SandboxTest.ps1 -Bootstrap `
+    -Command "Set-Location C:\crr; uv run python -m unittest discover -s tests" `
+    -TimeoutSec 1200
+
+# debug interativo: mantém o Sandbox aberto após o job
+.\scripts\Invoke-SandboxTest.ps1 -Command "whoami" -KeepOpen
+```
+
+Protocolo (`.sandbox-job\<id>\` ↔ `C:\job`):
+
+| Lado | Arquivo | Papel |
+|---|---|---|
+| host → sandbox | `in\command.ps1` | comando a executar |
+| sandbox → host | `out\stdout.log` / `out\stderr.log` | saída capturada |
+| sandbox → host | `out\exitcode.txt` | `0` = ok; `124` = timeout do job (via `$LASTEXITCODE` no wrapper) |
+| sandbox → host | `out\done.marker` | sinal de conclusão (host faz poll até `-TimeoutSec`) |
+| sandbox → host | `out\started.marker` | heartbeat: prova que o `LogonCommand` rodou |
 
 ## Salvaguardas
 
@@ -72,5 +104,8 @@ Fechou o Sandbox, tudo é descartado — abra de novo para a próxima bateria li
 | Sandbox não alcança `:8091`/`:8082` | `llama-server` preso em `127.0.0.1` → subir com `--host 0.0.0.0`; rodar com `-OpenModelPorts` em terminal admin |
 | `HOST_IP` não resolvido | `bootstrap.ps1` não achou o gateway → rode `Get-NetRoute -DestinationPrefix "0.0.0.0/0"` no Sandbox e edite `config.sandbox.json` à mão |
 | winget lento na primeira abertura | normal: Python+uv instalam a cada boot (Sandbox não tem snapshot); deixe o `bootstrap.ps1` terminar |
+| job do agente sem resposta | `Invoke-SandboxTest.ps1` estourou `-TimeoutSec` → aumente o timeout; com `-KeepOpen`, abra o Sandbox e leia `C:\job\out\` |
+| job sem nem `started.marker` | `LogonCommand` não rodou (boot/logon travou) → feche o Sandbox e rode de novo;timeout também fecha o Sandbox sozinho |
+| `.sandbox-job\` crescendo | jobs antigos não são apagados sozinhos → limpe a pasta de vez em quando |
 | Sandbox não abre | recurso desabilitado ou sem virtualização → habilite Windows Sandbox + VT-x/AMD-V na BIOS |
 | Clique deslocado no Sandbox | escala de DPI ≠ 100% no Sandbox — fixe 100% |

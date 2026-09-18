@@ -7,6 +7,8 @@ run.jsonl
 run-*/
 config.sandbox.json
 sandbox/crr.local.wsb
+sandbox/crr-agent.local.wsb
+.sandbox-job/
 debug/
 dist/
 build/

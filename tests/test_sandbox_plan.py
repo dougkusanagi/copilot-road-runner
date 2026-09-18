@@ -24,23 +24,32 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 LAUNCHER = ROOT / "scripts" / "Start-Sandbox.ps1"
+INVOKER = ROOT / "scripts" / "Invoke-SandboxTest.ps1"
 BOOTSTRAP = ROOT / "sandbox" / "bootstrap.ps1"
+AGENT = ROOT / "sandbox" / "agent.ps1"
 DOC = ROOT / "docs" / "sandbox-test-env.md"
 SBX_EXAMPLE = ROOT / "sandbox" / "config.sandbox.example.json"
 GITIGNORE = ROOT / ".gitignore"
 
 
-def _render_wsb(memory: int = 4096) -> str:
-    src = LAUNCHER.read_text(encoding="utf-8")
+def _render_template(ps1_path: Path, memory: int = 4096) -> str:
+    src = ps1_path.read_text(encoding="utf-8")
     start = src.index("$Template = @'") + len("$Template = @'")
     end = src.index("'@", start)
     tpl = src[start:end].strip()
-    return tpl.replace("__REPO__", str(ROOT)).replace("__MEMORY__", str(memory))
+    return (tpl.replace("__REPO__", str(ROOT))
+               .replace("__JOB__", str(ROOT / ".sandbox-job" / "x"))
+               .replace("__LOGON__", "agent")
+               .replace("__MEMORY__", str(memory)))
+
+
+def _render_wsb(memory: int = 4096) -> str:
+    return _render_template(LAUNCHER, memory)
 
 
 class TestSandboxFiles(unittest.TestCase):
     def test_arquivos_existem(self):
-        for p in (LAUNCHER, BOOTSTRAP, DOC, SBX_EXAMPLE):
+        for p in (LAUNCHER, INVOKER, BOOTSTRAP, AGENT, DOC, SBX_EXAMPLE):
             self.assertTrue(p.is_file(), f"faltando: {p.name}")
 
     def test_example_valido_e_aponta_p_host(self):
@@ -64,6 +73,8 @@ class TestSandboxFiles(unittest.TestCase):
         ign = GITIGNORE.read_text(encoding="utf-8").splitlines()
         self.assertIn("config.sandbox.json", ign)
         self.assertIn("sandbox/crr.local.wsb", ign)
+        self.assertIn("sandbox/crr-agent.local.wsb", ign)
+        self.assertIn(".sandbox-job/", ign)
         # o exemplo PRECISA ser versionado (bootstrap copia p/ config)
         self.assertNotIn("sandbox/config.sandbox.example.json", ign)
 
@@ -109,7 +120,7 @@ class TestSandboxScripts(unittest.TestCase):
 
     def test_powershell_parse_sem_executar(self):
         """Parser oficial do PS: erro de sintaxe falha aqui, sem Sandbox."""
-        for ps1 in (LAUNCHER, BOOTSTRAP):
+        for ps1 in (LAUNCHER, INVOKER, BOOTSTRAP, AGENT):
             cmd = (
                 "$errs=$null; $toks=$null; "
                 "[void][System.Management.Automation.Language.Parser]::"
@@ -126,6 +137,48 @@ class TestSandboxScripts(unittest.TestCase):
             self.assertEqual(out.stdout.strip(), "0",
                              f"erro de sintaxe em {ps1.name}: "
                              f"{out.stdout}{out.stderr[:500]}")
+
+
+class TestSandboxAgent(unittest.TestCase):
+    def test_host_runner_sem_admin_e_protocolo(self):
+        src = INVOKER.read_text(encoding="utf-8")
+        self.assertNotIn("#Requires -RunAsAdministrator", src)
+        self.assertIn("SupportsShouldProcess", src)
+        for needle in ("command.ps1", "done.marker", "started.marker",
+                       "exitcode.txt", "stdout.log", "stderr.log",
+                       "TimeoutSec", "-Bootstrap", "-KeepOpen", "-NoThrow",
+                       "WindowsSandboxClient", "crr-agent.local.wsb",
+                       "MappedFolder", "agent.ps1"):
+            self.assertIn(needle, src, f"trecho ausente: {needle}")
+
+    def test_wsb_agente_tem_duas_pastas(self):
+        root = ET.fromstring(_render_template(INVOKER))
+        folders = root.findall("./MappedFolders/MappedFolder")
+        self.assertEqual(len(folders), 2)
+        sandboxes = [f.find("SandboxFolder").text for f in folders]
+        self.assertIn("C:\\crr", sandboxes)
+        self.assertIn("C:\\job", sandboxes)
+        # __LOGON__ vira o comando do agent.ps1 em runtime; o template
+        # guarda o placeholder e o script monta o comando com agent.ps1
+        cmd = root.find("./LogonCommand/Command").text
+        self.assertEqual(cmd, "agent")
+        src = INVOKER.read_text(encoding="utf-8")
+        self.assertIn("C:\\crr\\sandbox\\agent.ps1 -JobDir C:\\job", src)
+
+    def test_agent_inbox_outbox_e_timeout(self):
+        src = AGENT.read_text(encoding="utf-8")
+        for needle in ("command.ps1", "done.marker", "started.marker",
+                       "exitcode.txt", "stdout.log", "stderr.log",
+                       "-Bootstrap", "bootstrap.ps1", "HasExited", "124",
+                       "LASTEXITCODE", "run-wrapper", "ErrorActionPreference",
+                       "PollTimeoutSec", "JobTimeoutSec"):
+            self.assertIn(needle, src, f"trecho ausente: {needle}")
+
+    def test_docs_cobre_agente(self):
+        doc = DOC.read_text(encoding="utf-8")
+        for needle in ("Invoke-SandboxTest.ps1", "agent.ps1",
+                       "done.marker", "command.ps1", "exitcode.txt"):
+            self.assertIn(needle, doc, f"docs sem: {needle}")
 
 
 class TestSandboxCliESalvaguardas(unittest.TestCase):
