@@ -1,15 +1,12 @@
-"""Visual fallback: VLM usado SÓ como grounding (screenshot + "locate X" → {x,y}).
+"""LEGADO — fora do fluxo principal desde a migração p/ 2 modelos.
 
-Modelo default: MAI-UI-2B (config.json → vision_model).
-Verificação de suporte (2026-09): MAI-UI-2B existe no HuggingFace
-(Tongyi-MAI/MAI-UI-2B, Qwen3-VL, Apache-2.0) e em quants comunitárias no
-Ollama (`maternion/mai-ui:2b`, ~2.6GB) — que expõe API OpenAI-compatible em
-http://127.0.0.1:11434/v1. Suporte nativo em LM Studio/llama.cpp (GGUF)
-não confirmado; regra do projeto: não travar nisso — a interface abaixo
-funciona com QUALQUER servidor OpenAI-compatible + modelo vision
-(qwen2-vl, llava, internvl2...). Troque só `base_url`/`vision_model`.
+O fluxo principal usa agora:
+  planner → planner.py (MiniCPM5-1B, só texto)
+  visão   → vocaela.py (VocaelaAdapter, formato oficial <Action>[...]</Action>)
 
-O controle do agente continua no Python; o VLM nunca decide ações.
+Este arquivo (grounding genérico MAI-UI / OpenAI-compatible) é mantido SÓ como
+fallback degradado (loop._decide_fallback) e referência. Não importar no fluxo
+principal.
 """
 from __future__ import annotations
 

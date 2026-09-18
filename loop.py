@@ -1,11 +1,19 @@
-"""Loop observe → decide → act → verify → repeat (MVP).
+"""Loop observe -> decide -> act -> verify -> repeat (2 modelos).
+
+Arquitetura:
+  MiniCPM5-1B = pensar (só texto compacto; nunca recebe screenshots,
+                nunca emite coordenadas)
+  Vocaela-2-500M = enxergar (screenshot + instrução curta -> ação visual 0..1)
+  Python = executar (tools determinísticas, UIA, mouse/teclado)
 
 Ordem de decisão (barata primeiro):
-  1. deterministic tools (open/focus/type por intenção: notepad, calc, browser)
-  2. Windows UI Automation (só janela ativa, formato compacto)
-  3. ActionScorer simples (candidates + threshold 0.80 → executa, senão VLM)
-  4. VLM SÓ como grounding (screenshot + "locate X" → {x,y} 0..1)
-Sem planner grande no MVP.
+  1. native tool      (open/focus/type decididos pelo planner ou fallback)
+  2. UI Automation    (uia_click por NOME; Vocaela nunca é chamado à toa)
+  3. Vocaela          (SÓ quando o elemento não está na accessibility tree)
+
+Planner offline (--no-planner ou servidor fora do ar) -> fallback
+determinístico honesto (router+scorer legados, marcados source="fallback").
+scorer/MAI-UI/VLM antigo NÃO estão no fluxo principal; vivem só no fallback.
 """
 from __future__ import annotations
 
@@ -18,14 +26,14 @@ import psutil
 
 import safety
 from actions import execute
-from obs import downscale_for_vlm, take_screenshot
+from obs import capture_for_vision
+from planner import MiniCPMPlanner, PlannerDecision
 from schemas import Action, Decision
-from scorer import SimpleScorer, build_candidates
-from tools import click_element
-from uia import active_window_snapshot, snapshot
+from tools import click_element  # noqa: F401  (compat; usado pelo fallback)
+from uia import active_window_snapshot, foreground_title, snapshot
+from vocaela import VocaelaAdapter, visual_to_action
 
 LOG = Path("run.jsonl")
-_scorer = SimpleScorer()
 
 NOTEPAD_WORDS = ["notepad", "bloco de notas"]
 CALC_WORDS = ["calculadora", "calculator"]
@@ -33,6 +41,17 @@ BROWSER_WORDS = ["browser", "navegador", "edge", "chrome", "brave", "busque", "b
                  "pesquise", "search", "google"]
 BROWSER_TITLES = ["edge", "chrome", "brave", "google", "nova guia", "new tab"]
 FOLLOW_WORDS = ["clique", "click", "resultado", "result", "primeiro", "link"]
+
+_JUNK_TYPES = {"window", "titlebar", "menubar"}
+_CHROME_PREFIXES = ("minimizar ", "maximizar ", "restaurar ", "fechar ",
+                    "minimize ", "maximize ", "restore ", "close ")
+# número-por-extenso PT+EN (UIA da calculadora Win expõe "Sete", não "7")
+_DIGIT_WORDS = {"0": ("zero",), "1": ("um", "one"), "2": ("dois", "two"),
+                "3": ("tres", "três", "three"), "4": ("quatro", "four"),
+                "5": ("cinco", "five"), "6": ("seis", "six"),
+                "7": ("sete", "seven"), "8": ("oito", "eight"),
+                "9": ("nove", "nine")}
+_WORD_DIGIT = {w: d for d, ws in _DIGIT_WORDS.items() for w in ws}
 
 
 def _log(obj: dict) -> None:
@@ -46,7 +65,7 @@ def _has_any(ins: str, words: list[str]) -> bool:
 
 
 def _extract_text_to_type(instruction: str) -> str:
-    m = re.search(r"(?:escreva|escrever|write|digite|digitar|type)\s+[\"']?(.+?)[\"']?$",
+    m = re.search(r"(?:escreva|escrever|write|digite|digitar|type)\s*[:\-—]?\s*[\"']?(.+?)[\"']?$",
                   instruction, re.IGNORECASE)
     return m.group(1).strip() if m else ""
 
@@ -57,187 +76,186 @@ def _extract_digit(instruction: str) -> str:
 
 
 def _extract_search_query(instruction: str) -> str:
-    m = re.search(r"(?:busque|buscar|pesquise|pesquisar|search|procure)\s+[\"']?(.+?)[\"']?$",
+    m = re.search(r"(?:busque|buscar|pesquise|pesquisar|search|procure)\s*[:\-—]?\s*[\"']?(.+?)[\"']?$",
                   instruction, re.IGNORECASE)
     return m.group(1).strip() if m else ""
 
 
-# --- fluxos determinísticos (steps fixos, sem IA) -----------------------------
-def _focused(words: list[str]) -> bool:
-    from uia import foreground_title
-
-    fg = foreground_title().lower()
-    return any(w in fg for w in words)
+# (dígito → nomes PT+EN em _DIGIT_WORDS acima; _resolve_uia expande sozinho)
 
 
-def _deterministic(step: int, instruction: str, ctx: dict) -> Action | None:
-    if _has_any(instruction, NOTEPAD_WORDS):
-        if step == 0:
-            return Action(type="open", target="notepad")
-        if step == 1:
-            return Action(type="focus", target="bloco de notas||notepad")
-        if ctx.get("typed"):
-            return Action(type="done")
-        if step == 2:
-            # Win11 = multi-tab: abre aba nova p/ nunca digitar em doc do usuário
-            return Action(type="hotkey", key="ctrl+n")
-        if step >= 3:
-            text = _extract_text_to_type(instruction)
-            if text:
-                return Action(type="type", text=text)
-            return None  # sem texto claro → cai p/ UIA/VLM
+# --- UIA resolve por nome (sem scorer no fluxo principal) ---------------------
+def _resolve_uia(items: list[dict], target: str, wrect: tuple | None,
+                 state_title: str = "") -> Action | None:
+    """Encontra elemento pelo NOME na janela ativa -> click no centro.
+
+    Retorna None se não achar (chamador escala p/ Vocaela). Nunca clica fora
+    da janela ativa nem em chrome (minimizar/fechar) nem na própria janela.
+    """
+    want = (target or "").strip().lower()
+    if not want:
         return None
-    if _has_any(instruction, CALC_WORDS):
-        if step == 0:
-            return Action(type="open", target="calc")
-        # UIA só vale na janela certa: garante foco antes de pontuar candidatos
-        if not _focused(["calculadora", "calculator"]) and ctx.get("cfocus", 0) < 2:
-            ctx["cfocus"] = ctx.get("cfocus", 0) + 1
-            return Action(type="focus", target="calculadora||calculator")
-        return None  # resto via UIA + scorer (Teste 2)
-    if _has_any(instruction, BROWSER_WORDS):
-        # Abre o Edge JÁ na URL da busca (confiável: evita autocomplete da
-        # barra de endereços, que re-selecionava sugestão quebrada e dava 404).
-        # O typing continua provado pelo Teste 1 (notepad).
-        import unicodedata
-        from urllib.parse import quote_plus
-
-        from uia import foreground_title as _fg
-
-        st = ctx.get("bstage", 0)
-        query = _extract_search_query(instruction) or instruction
-        if st == 0:
-            if step == 0:
-                ascii_q = unicodedata.normalize("NFKD", query).encode("ascii", "ignore").decode()
-                url = ("https://www.google.com/search?q=" + quote_plus(ascii_q)
-                       if not query.startswith("http") else query)
-                ctx["bstage"] = 1
-                return Action(type="open", target=f'msedge "{url}"')
-            return None
-        if not _focused(BROWSER_TITLES):
-            n = ctx.get("bfocus", 0)
-            if n < 2:
-                ctx["bfocus"] = n + 1
-                return Action(type="focus", target="edge||chrome||brave")
-            raise RuntimeError("navegador não abriu/não focou; abortando "
-                               "para não atuar na janela errada.")
-        fg = _fg().lower()
-        if any(w in fg for w in ("404", "error", "não é possível", "can't be reached",
-                                 "não pode ser acessada", "err_")):
-            raise RuntimeError(f"página de erro no browser ({fg[:60]!r}); "
-                               "verifique rede/extensões e rode de novo.")
-        if _has_any(instruction, FOLLOW_WORDS):
-            return None  # ex: "clique no resultado" → segue p/ UIA/scorer/VLM
-        probe = [t for t in re.findall(r"\w+", query.lower()) if len(t) > 2][:4]
-        if "google" in fg or "pesquisa" in fg or any(p in fg for p in probe):
-            return Action(type="done")
-        n = ctx.get("bwaits", 0)
-        if n < 3:
-            ctx["bwaits"] = n + 1
-            return Action(type="wait", ms=2000)
-        raise RuntimeError(f"página não confirmou (active={fg[:60]!r}).")
-    return None
+    # "7" casa "Sete" e vice-versa
+    wants = {want}
+    if want in _DIGIT_WORDS:
+        wants |= set(_DIGIT_WORDS[want])
+    if want in _WORD_DIGIT:
+        wants.add(_WORD_DIGIT[want])
+    exact = prefix = sub = None
+    for it in items:
+        name = (it.get("name") or "").strip()
+        if not name or len(name) > 60:
+            continue
+        nl = name.lower()
+        if nl.startswith(_CHROME_PREFIXES):
+            continue
+        if (it.get("type") or "").lower() in _JUNK_TYPES:
+            continue
+        if state_title and nl == state_title.lower():
+            continue
+        if nl in wants and exact is None:
+            exact = it
+            continue
+        for w in wants:
+            if nl.startswith(w) and prefix is None:
+                prefix = it
+            elif w in nl and sub is None:
+                sub = it
+    hit = exact or prefix or sub
+    if hit is None:
+        return None
+    b = hit.get("bounds") or [0, 0, 0, 0]
+    cx, cy = (b[0] + b[2]) // 2, (b[1] + b[3]) // 2
+    if wrect is not None and not (wrect[0] <= cx <= wrect[2]
+                                  and wrect[1] <= cy <= wrect[3]):
+        return None  # rect fantasma fora da janela -> trata como miss
+    return Action(type="click", x=cx, y=cy)
 
 
-# --- conclusão por verificação (sem LLM) --------------------------------------
-def _done_by_verify(instruction: str, ctx: dict) -> tuple[bool, str]:
-    """Checa objetivo cumprido via UIA. Só p/ testes determinísticos."""
-    if _has_any(instruction, CALC_WORDS):
-        digit = _extract_digit(instruction)
-        if not digit:
-            return False, ""
-        for el in snapshot():
-            if el.automation_id == "CalculatorResults" and digit in (el.name or ""):
-                return True, f"calculator display = {digit}"
-        return False, ""
-    if _has_any(instruction, NOTEPAD_WORDS):
-        text = _extract_text_to_type(instruction)
-        if not text:
-            return False, ""
-        needle = text[:20].lower()
-        for el in snapshot():
-            if needle and needle in (el.name or "").lower():
-                return True, "notepad text verified"
-        return False, ""
-    if _has_any(instruction, BROWSER_WORDS):
-        if ctx.get("bstage", 0) >= 4 and _focused(BROWSER_TITLES):
-            from uia import foreground_title as _fg2
+def _planner_to_action(dec: PlannerDecision) -> Action | None:
+    """Mapeia decisão nativa do planner -> Action. uia_click/visual voltam None
+    (resolvidos à parte)."""
+    t = dec.type
+    if t == "open_app":
+        return Action(type="open", target=dec.app or "")
+    if t == "open_url":
+        from tools import open_url
 
-            if any(w in _fg2().lower() for w in ("404", "error", "não é possível",
-                                                 "can't be reached", "err_")):
-                return False, ""  # deixa o _deterministic tentar 1 retry
-            return True, "browser search submitted"
-        return False, ""
-    return False, ""
+        return open_url(dec.url or "")
+    if t == "focus_window":
+        return Action(type="focus", target=dec.target or "")
+    if t == "type_text":
+        return Action(type="type", text=dec.text or "")
+    if t == "press_key":
+        return Action(type="hotkey", key=dec.key or "enter")
+    if t == "hotkey":
+        return Action(type="hotkey", key=dec.keys or "")
+    if t == "wait":
+        return Action(type="wait", ms=dec.ms or 1000)
+    if t == "done":
+        return Action(type="done")
+    return None  # uia_click, visual_action
 
 
-# --- decide -------------------------------------------------------------------
-def decide(instruction: str, step: int, ctx: dict, cfg: dict) -> tuple[Decision, dict]:
-    t: dict = {}
+def _short(dec: PlannerDecision) -> str:
+    t = dec.type
+    arg = (dec.app or dec.url or dec.target or dec.text or dec.key
+           or dec.keys or dec.instruction or "")
+    if len(arg) > 42:
+        arg = arg[:42] + "..."
+    return f"{t}({arg})" if arg else t
+
+
+# --- decide: fluxo principal (planner) ----------------------------------------
+def _decide_planner(instruction: str, ctx: dict, cfg: dict,
+                    planner: MiniCPMPlanner,
+                    vocaela: VocaelaAdapter) -> tuple[Decision, dict]:
+    t: dict = {"planner_ms": 0.0, "uia_ms": 0.0, "screenshot_ms": 0.0,
+               "vision_ms": 0.0, "vision_calls": 0, "planner_calls": 0}
     t0 = time.perf_counter()
-    det = _deterministic(step, instruction, ctx)
-    t["tool_ms"] = round((time.perf_counter() - t0) * 1000, 1)
-    if det is not None:
-        src = "deterministic"
-        return Decision(action=det, source=src, confidence=0.99,
-                        reason="deterministic tool"), t
-
-    t1 = time.perf_counter()
     items, title, wrect = active_window_snapshot()
-    t["uia_ms"] = round((time.perf_counter() - t1) * 1000, 1)
+    t["uia_ms"] = round((time.perf_counter() - t0) * 1000, 1)
     t["uia_title"] = title
     t["uia_count"] = len(items)
+    names = [(it.get("name") or "") for it in items][:40]
 
-    # nunca pontua a janela errada: sem foco no alivo do teste, aborta honesto
-    if _has_any(instruction, CALC_WORDS) and "calcul" not in title.lower():
-        raise RuntimeError(f"foco saiu da calculadora (active={title!r}); abortando.")
+    last_error = ctx.get("last_error", "")
+    try:
+        dec, pms = planner.next_action(
+            goal=instruction, window=title, ui_names=names,
+            history=ctx.get("hist_labels", []), last_error=last_error)
+    except Exception as e:
+        ctx["planner_errors"] = ctx.get("planner_errors", 0) + 1
+        raise RuntimeError(f"planner falhou: {e}")
+    t["planner_ms"] = round(pms, 1)
+    t["planner_calls"] = 1
+    t["planner_decision"] = dec.model_dump()
+    ctx["planner_errors"] = 0
+    ctx["last_error"] = ""
 
-    t2 = time.perf_counter()
-    cands = build_candidates(items, state_title=title)
-    scored = _scorer.score(instruction, title, cands)
-    t["scorer_ms"] = round((time.perf_counter() - t2) * 1000, 1)
-    top = scored[0]
-    t["scorer_top"] = top.candidate.label
-    t["scorer_conf"] = top.confidence
+    # guarda anti-janela-errada: sem foco no alvo, planner deve focar/abrir —
+    # se ele insistir em agir, devolve como last_error em vez de executar.
+    if _has_any(instruction, CALC_WORDS) and "calcul" not in title.lower() \
+            and dec.type in ("type_text", "uia_click", "visual_action",
+                             "press_key", "hotkey"):
+        ctx["last_error"] = (f"janela ativa é {title!r}, não a calculadora; "
+                             "use focus_window ou open_app primeiro.")
+        raise RuntimeError(ctx["last_error"])
 
-    threshold = float(cfg.get("scorer_threshold", 0.8))
-    if top.confidence >= threshold and top.candidate.kind == "click":
-        b = top.candidate.bounds or [0, 0, 0, 0]
-        cx, cy = (b[0] + b[2]) // 2, (b[1] + b[3]) // 2
-        # clique precisa cair DENTRO da janela ativa (mata rects fantasmas)
-        if wrect is not None and not (wrect[0] <= cx <= wrect[2]
-                                      and wrect[1] <= cy <= wrect[3]):
-            t["scorer_top"] = f"{top.candidate.label} (fora da janela; ignorado)"
-        else:
-            return Decision(action=Action(type="click", x=cx, y=cy), source="scorer",
-                            confidence=top.confidence,
-                            reason=f'scorer {top.candidate.label}'), t
+    native = _planner_to_action(dec)
+    if native is not None:
+        return Decision(action=native, source="planner", confidence=0.9,
+                        reason=f"planner {_short(dec)}"), t
 
-    # VLM: só grounding
-    if ctx.get("no_vlm"):
-        raise RuntimeError(f"top={top.candidate.label} conf={top.confidence:.2f} "
-                           f"< {threshold} e --no-vlm ativo.")
-    from vlm import LMStudioVisionModel, check_server
+    if dec.type == "uia_click":
+        hit = _resolve_uia(items, dec.target or "", wrect, state_title=title)
+        if hit is not None:
+            return Decision(action=hit, source="uia", confidence=0.9,
+                            reason=f'uia_click("{dec.target}")'), t
+        # miss acessível -> escala p/ visão com a mesma intenção
+        dec = PlannerDecision(type="visual_action",
+                              instruction=f"Click {dec.target}")
+        t["escalated"] = "uia_miss->vision"
 
-    t3 = time.perf_counter()
-    status = check_server(cfg.get("base_url", "http://127.0.0.1:1234/v1"))
-    if not status.get("ok"):
-        raise RuntimeError(f"top={top.candidate.label} conf={top.confidence:.2f} "
-                           f"< {threshold} e servidor offline: {status.get('error')}. "
-                           "Suba o modelo vision ou rode com --no-vlm.")
-    from obs import LAST_PNG
+    # visual_action: screenshot SÓ agora -> Vocaela -> coords 0..1 -> físico
+    s0 = time.perf_counter()
+    img, origin, full = capture_for_vision(
+        max_long_edge=int(cfg.get("screenshot_max_width", 1024)))
+    t["screenshot_ms"] = round((time.perf_counter() - s0) * 1000, 1)
+    try:
+        from obs import LAST_PNG
 
-    b64, _ = downscale_for_vlm(LAST_PNG, max_width=int(cfg.get("screenshot_max_width", 1280)))
-    _, real = take_screenshot()
-    vm = LMStudioVisionModel(base_url=cfg["base_url"], model=cfg.get("vision_model", "MAI-UI-2B"))
-    target = _extract_text_to_type(instruction) or instruction
-    res = vm.locate_sync(b64, f'"{target}" button/element')
-    t["vision_ms"] = round((time.perf_counter() - t3) * 1000, 1)
+        img.save(LAST_PNG)  # prova/depuração do que o Vocaela viu
+    except Exception:
+        pass
+    try:
+        va, vms = vocaela.act_sync(img, dec.instruction or "")
+    except Exception as e:
+        raise RuntimeError(f"vocaela falhou: {e}")
+    t["vision_ms"] = round(vms, 1)
     t["vision_calls"] = 1
-    if res.x < 0:
-        raise RuntimeError("VLM não encontrou o elemento (x=-1).")
-    return Decision(action=vm.to_click(res, real), source="vlm",
-                    confidence=res.confidence, reason="vision grounding"), t
+    t["visual"] = va.model_dump()
+    act = visual_to_action(va, (img.size[0], img.size[1]), origin)
+    return Decision(action=act, source="vocaela", confidence=0.8,
+                    reason=f'visual "{dec.instruction}" -> '
+                           f'{va.type}({va.x},{va.y})'), t
+
+
+def decide(instruction: str, step: int, ctx: dict, cfg: dict,
+           planner: MiniCPMPlanner | None = None,
+           vocaela: VocaelaAdapter | None = None) -> tuple[Decision, dict]:
+    if planner is not None and vocaela is not None and not ctx.get("force_fallback"):
+        try:
+            return _decide_planner(instruction, ctx, cfg, planner, vocaela)
+        except RuntimeError as e:
+            n = ctx.get("planner_errors", 0)
+            ctx["last_error"] = str(e)[:300]
+            if n >= 3:
+                ctx["force_fallback"] = True
+                print("planner falhou 3x -> fallback determinístico até o fim.")
+                return _decide_fallback(instruction, step, ctx, cfg)
+            raise
+    return _decide_fallback(instruction, step, ctx, cfg)
 
 
 # --- verify -------------------------------------------------------------------
@@ -254,9 +272,7 @@ def verify(action: Action, instruction: str, cfg: dict) -> tuple[bool, str]:
                 return ok, f"calculator display = {el.name!r}"
         return False, "calc results not found"
     if _has_any(instruction, NOTEPAD_WORDS):
-        from uia import foreground_title as _fg
-
-        fg = _fg()
+        fg = foreground_title()
         ok = "bloco de notas" in fg.lower() or "notepad" in fg.lower()
         if not ok:
             return False, f"foco fora do notepad: active={fg!r} (retry)"
@@ -268,9 +284,7 @@ def verify(action: Action, instruction: str, cfg: dict) -> tuple[bool, str]:
                     return True, "notepad text verified"
         return True, f"typed, active={fg!r} (texto não exposto na UIA)"
     if _has_any(instruction, BROWSER_WORDS):
-        from uia import foreground_title as _fg
-
-        fg = _fg()
+        fg = foreground_title()
         ok = _focused(BROWSER_TITLES)
         return ok, f"browser active={fg!r}" if ok else f"foco fora do browser: active={fg!r}"
     items, title, _ = active_window_snapshot()
@@ -281,9 +295,22 @@ def _key(a: Action) -> str:
     return f"{a.type}:{a.x},{a.y}:{a.text}:{a.key}:{a.target}"
 
 
+def _vram() -> str:
+    try:
+        import subprocess
+
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.used",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=10).stdout.strip()
+        return f"{out} MiB (nvidia-smi)" if out else "n/a"
+    except Exception:
+        return "n/a (sem nvidia-smi)"
+
+
 # --- run ----------------------------------------------------------------------
 def run(instruction: str, cfg: dict) -> dict:
-    max_steps = int(cfg.get("max_steps", 20))
+    max_steps = int(cfg.get("max_steps", 30))
     print(f"Task: {instruction}")
     print("Stop: Ctrl+Alt+Esc (ou ESC) | Ctrl+C no terminal.")
     safety.start()
@@ -297,9 +324,39 @@ def run(instruction: str, cfg: dict) -> dict:
     if LOG.exists():
         LOG.unlink()
 
-    ctx: dict = {"no_vlm": bool(cfg.get("no_vlm", False))}
-    metrics = {"tool_ms": 0.0, "uia_ms": 0.0, "scorer_ms": 0.0, "vision_ms": 0.0,
-               "execution_ms": 0.0, "vision_calls": 0, "steps": 0}
+    # --- sobe os dois modelos (probe honesto, sem travar) ---
+    planner = vocaela = None
+    mode = "fallback"
+    if not cfg.get("no_planner"):
+        pc = cfg.get("planner", {})
+        planner = MiniCPMPlanner(base_url=pc.get("base_url", "http://127.0.0.1:8081/v1"),
+                                 model=pc.get("model", "MiniCPM5-1B"),
+                                 temperature=float(pc.get("temperature", 0.1)),
+                                 timeout_s=float(pc.get("timeout_s", 90)))
+        st = planner.check()
+        if st.get("ok"):
+            vc = cfg.get("vision", {})
+            vocaela = VocaelaAdapter(
+                base_url=vc.get("base_url", "http://127.0.0.1:8082/v1"),
+                model=vc.get("model", "Vocaela-2-500M-1024R2"),
+                timeout_s=float(vc.get("timeout_s", 180)),
+                max_long_edge=int(cfg.get("screenshot_max_width", 1024)))
+            mode = "planner"
+            print(f"Planner: MiniCPM ({planner.base_url} modelos={st.get('models')})")
+            vs = vocaela.check()
+            print(f"Visão: Vocaela ({vocaela.base_url} "
+                  f"{'ok' if vs.get('ok') else 'OFFLINE: ' + str(vs.get('error'))[:80]})")
+        else:
+            print(f"Planner offline ({st.get('error')}) -> fallback determinístico.")
+            planner = None
+    else:
+        print("Planner desativado (--no-planner) -> fallback determinístico.")
+
+    ctx: dict = {"no_vision": bool(cfg.get("no_vision", cfg.get("no_vlm", False))),
+                 "hist_labels": []}
+    metrics = {"planner_ms": 0.0, "uia_ms": 0.0, "screenshot_ms": 0.0,
+               "vision_ms": 0.0, "execution_ms": 0.0, "step_ms": 0.0,
+               "vision_calls": 0, "planner_calls": 0, "steps": 0}
     history: list[str] = []
     forced_vision = False
     n = 0
@@ -318,7 +375,6 @@ def run(instruction: str, cfg: dict) -> dict:
                 result = "aborted"
                 break
             s0 = time.perf_counter()
-            path, real_size = take_screenshot()
 
             done, note = _done_by_verify(instruction, ctx)
             if done:
@@ -327,38 +383,60 @@ def run(instruction: str, cfg: dict) -> dict:
                 break
 
             try:
-                dec, tm = decide(instruction, step, ctx, cfg)
+                dec, tm = decide(instruction, step, ctx, cfg, planner, vocaela)
             except RuntimeError as e:
-                print(f"PARADO step {step}: {e}")
-                _log({"step": step, "event": "stuck", "error": str(e)})
-                result = "stuck"
-                break
+                if ctx.get("force_fallback") or planner is None:
+                    print(f"PARADO step {step}: {e}")
+                    _log({"step": step, "event": "stuck", "error": str(e)})
+                    result = "stuck"
+                    break
+                # erro transitório do planner/vocaela: alimenta last_error e tenta
+                print(f"[retry] step {step}: {e}")
+                _log({"step": step, "event": "retry", "error": str(e)})
+                time.sleep(0.5)
+                continue
 
-            metrics["tool_ms"] += tm.get("tool_ms", 0)
+            metrics["planner_ms"] += tm.get("planner_ms", 0) + tm.get("tool_ms", 0)
             metrics["uia_ms"] += tm.get("uia_ms", 0)
-            metrics["scorer_ms"] += tm.get("scorer_ms", 0)
+            metrics["screenshot_ms"] += tm.get("screenshot_ms", 0)
             metrics["vision_ms"] += tm.get("vision_ms", 0)
             metrics["vision_calls"] += tm.get("vision_calls", 0)
+            metrics["planner_calls"] += tm.get("planner_calls", 0)
 
-            if dec.source == "deterministic":
+            src = dec.source
+            if src in ("planner", "fallback") and dec.action.type in (
+                    "open", "focus", "type", "hotkey", "wait", "done"):
                 a = dec.action
                 arg = a.target or a.text or a.key or ""
-                emit("TOOL", f'{a.type}("{arg}")', f'{tm.get("tool_ms", 0):.0f} ms')
+                layer = "PLANNER" if src == "planner" else "TOOL"
+                emit(layer, f'{a.type}("{arg}")',
+                     f'{tm.get("planner_ms", tm.get("tool_ms", 0)):.0f}ms')
             else:
-                emit("UIA", f'found {tm.get("uia_count", 0)} ("{tm.get("uia_title", "")}")',
-                     f'{tm.get("uia_ms", 0):.0f} ms')
-                if dec.source == "scorer":
-                    emit("SCORER", f'{tm.get("scorer_top")}',
-                         f'{tm.get("scorer_ms", 0):.0f} ms | confidence {dec.confidence:.2f}')
+                if tm.get("uia_count") is not None:
+                    emit("UIA", f'found {tm.get("uia_count", 0)} '
+                                f'("{tm.get("uia_title", "")}")',
+                         f'{tm.get("uia_ms", 0):.0f}ms')
+                if src == "vocaela":
+                    va = tm.get("visual", {})
+                    emit("PLANNER", f'visual: {tm.get("planner_decision", {}).get("instruction", "")}',
+                         f'{tm.get("planner_ms", 0):.0f}ms')
+                    if tm.get("screenshot_ms"):
+                        emit("SHOT", "active-window capture",
+                             f'{tm.get("screenshot_ms", 0):.0f}ms')
+                    emit("VISION", f'{va.get("type")}({va.get("x")}, {va.get("y")})',
+                         f'{tm.get("vision_ms", 0):.0f}ms')
+                elif src == "uia":
+                    emit("PLANNER", f'uia: {dec.reason}',
+                         f'{tm.get("planner_ms", 0):.0f}ms')
                 else:
-                    emit("VLM", f'grounding ({dec.reason})',
-                         f'{tm.get("vision_ms", 0):.0f} ms | confidence {dec.confidence:.2f}')
+                    emit("SCORER", dec.reason or f'{tm.get("scorer_top")}',
+                         f'{tm.get("scorer_ms", 0):.0f}ms | conf {dec.confidence:.2f}')
 
-            # anti-loop: mesma ação 3× → força vision 1×; se persistir → stop
+            # anti-loop: mesma ação 3× -> força vision 1×; se persistir -> stop
             k = _key(dec.action)
             history.append(k)
             if len(history) >= 3 and history[-1] == history[-2] == history[-3]:
-                if not forced_vision and not ctx.get("no_vlm"):
+                if not forced_vision and not ctx.get("no_vision") and vocaela is not None:
                     print("mesma acao 3x -> forcando vision fallback 1x")
                     forced_vision = True
                     history.clear()
@@ -380,14 +458,21 @@ def run(instruction: str, cfg: dict) -> dict:
             try:
                 desc = execute(dec.action)
             except (ValueError, AssertionError) as e:
-                # ex: clique fora da tela → para com mensagem, nunca clica no escuro
+                # ex: clique fora da tela -> para com mensagem, nunca clica no escuro
                 print(f"PARADO step {step}: ação recusada: {e}")
                 _log({"step": step, "event": "refused", "error": str(e)})
                 result = "stuck"
                 break
             exec_ms = (time.perf_counter() - e0) * 1000
             metrics["execution_ms"] += exec_ms
-            emit("EXEC", desc, f"{exec_ms:.0f} ms")
+            emit("EXEC", desc, f"{exec_ms:.0f}ms")
+
+            label = desc
+            if src == "vocaela" and tm.get("visual"):
+                va = tm["visual"]
+                label = (f'visual "{tm.get("planner_decision", {}).get("instruction", "")}"'
+                         f" -> {va.get('type')}({va.get('x')},{va.get('y')})")
+            ctx["hist_labels"].append(label)
 
             if dec.action.type == "type" and _has_any(instruction, NOTEPAD_WORDS):
                 ctx["typed"] = True
@@ -405,6 +490,8 @@ def run(instruction: str, cfg: dict) -> dict:
                   "verify": vnote, "timings": tm,
                   "cpu": psutil.cpu_percent(interval=None),
                   "mem": round(psutil.virtual_memory().percent, 1)})
+            step_ms = (time.perf_counter() - s0) * 1000
+            metrics["step_ms"] += step_ms
             time.sleep(0.3)
         else:
             result = "max_steps"
@@ -423,11 +510,20 @@ def run(instruction: str, cfg: dict) -> dict:
     total_ms = (time.perf_counter() - total0) * 1000
     print(f"\n{result.upper()}")
     print(f"Total: {total_ms / 1000:.1f}s")
-    summary = {"test": instruction, "result": result, "steps": metrics["steps"],
-               "vision_calls": metrics["vision_calls"],
-               "total_s": round(total_ms / 1000, 1), "metrics_ms": {
-                   "tool": round(metrics["tool_ms"], 1), "uia": round(metrics["uia_ms"], 1),
-                   "scorer": round(metrics["scorer_ms"], 1),
+    pcalls = metrics["planner_calls"]
+    vcalls = metrics["vision_calls"]
+    summary = {"test": instruction, "result": result, "mode": mode,
+               "steps": metrics["steps"],
+               "planner_calls": pcalls, "vocaela_calls": vcalls,
+               "total_s": round(total_ms / 1000, 1),
+               "avg_planner_ms": round(metrics["planner_ms"] / pcalls, 1) if pcalls else 0,
+               "avg_vision_ms": round(metrics["vision_ms"] / vcalls, 1) if vcalls else 0,
+               "ram_pct": round(psutil.virtual_memory().percent, 1),
+               "vram": _vram(),
+               "metrics_ms": {
+                   "planner": round(metrics["planner_ms"], 1),
+                   "uia": round(metrics["uia_ms"], 1),
+                   "screenshot": round(metrics["screenshot_ms"], 1),
                    "vision": round(metrics["vision_ms"], 1),
                    "exec": round(metrics["execution_ms"], 1)}}
     print(f"log em {LOG}")

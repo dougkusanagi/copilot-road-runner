@@ -77,8 +77,22 @@ def test_visual_to_action() -> None:
     print("visual_to_action OK")
 
 
+def test_loop_extractors() -> None:
+    from loop import _extract_search_query, _extract_text_to_type
+
+    assert _extract_text_to_type(
+        "Abra o Notepad e escreva: Ola, este texto foi escrito por um agente local."
+    ) == "Ola, este texto foi escrito por um agente local."
+    assert _extract_text_to_type('Abra o notepad e escreva "Oi mundo"') == "Oi mundo"
+    assert _extract_text_to_type("abra o notepad") == ""
+    assert _extract_search_query("Abra o Edge e pesquise: RTX 5060 Ti preço") == \
+        "RTX 5060 Ti preço"
+    print("loop extractors OK")
+
+
 if __name__ == "__main__":
     test_planner_parser()
     test_vocaela_parser()
     test_visual_to_action()
+    test_loop_extractors()
     print("TODOS OS TESTES OK")

@@ -36,11 +36,12 @@ def _migrate_legacy(cfg: dict) -> dict:
     """Aceita config.json antigo {base_url, vision_model, ...} e mapeia p/ novo."""
     legacy_url = cfg.pop("base_url", None)
     legacy_model = cfg.pop("vision_model", None)  # MAI-UI: aposentado do fluxo
-    if legacy_url and ("planner" not in cfg or "vision" not in cfg):
-        if "planner" not in cfg:
-            cfg["planner"] = {**DEFAULTS["planner"], "base_url": legacy_url}
-        if "vision" not in cfg:
-            cfg["vision"] = {**DEFAULTS["vision"], "base_url": legacy_url}
+    if legacy_url:
+        for sec in ("planner", "vision"):
+            cur = cfg.get(sec, {}).get("base_url", "")
+            if sec not in cfg or cur in ("", DEFAULTS[sec]["base_url"]):
+                cfg.setdefault(sec, {}).update(
+                    {**DEFAULTS[sec], **cfg.get(sec, {}), "base_url": legacy_url})
         print(f"config legado migrado: base_url {legacy_url} aplicado a planner+vision; "
               f"ajuste config.json p/ 8081/8082.")
     if legacy_model and legacy_model != DEFAULTS["vision"]["model"]:

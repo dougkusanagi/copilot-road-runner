@@ -163,29 +163,49 @@ CHROME_BARE = {"minimizar", "maximizar", "restaurar", "fechar",
 
 def build_candidates(items: list[dict], state_title: str = "",
                      max_clicks: int = 12) -> list[CandidateAction]:
-    """Candidatos a partir do snapshot compacto [{id,name,type,bounds}]."""
+    """Candidatos a partir do snapshot compacto [{id,name,type,bounds}].
+
+    Botões/controles clicáveis entram primeiro; elementos Text (ex: display da
+    calculadora, que contém dígitos do goal e engana o scorer) só entram se
+    sobrar espaço.
+    """
+    def _accept(it: dict) -> CandidateAction | None:
+        name = (it.get("name") or "").strip()
+        if not name or len(name) > 60:  # títulos longos (ex: aba de terminal) viram ruído
+            return None
+        nl = name.lower()
+        if nl in seen or nl in JUNK_NAMES or nl in CHROME_BARE:
+            return None
+        if nl.startswith(CHROME_PREFIXES):
+            return None
+        if (it.get("type") or "").lower() in skip_types:
+            return None
+        if state_title and nl == state_title.lower():
+            return None  # a própria janela nunca é alvo de clique
+        seen.add(nl)
+        return CandidateAction(kind="click", label=f'click("{name}")',
+                               element_id=it.get("id"), name=name,
+                               bounds=it.get("bounds"))
+
     cands: list[CandidateAction] = []
     seen: set[str] = set()
     skip_types = {"window", "titlebar", "menubar"}
+    leftovers: list[CandidateAction] = []
     for it in items:
-        name = (it.get("name") or "").strip()
-        if not name or len(name) > 60:  # títulos longos (ex: aba de terminal) viram ruído
+        c = _accept(it)
+        if c is None:
             continue
-        nl = name.lower()
-        if nl in seen or nl in JUNK_NAMES or nl in CHROME_BARE:
-            continue
-        if nl.startswith(CHROME_PREFIXES):
-            continue
-        if (it.get("type") or "").lower() in skip_types:
-            continue
-        if state_title and name.lower() == state_title.lower():
-            continue  # a própria janela nunca é alvo de clique
-        seen.add(name.lower())
-        cands.append(CandidateAction(kind="click", label=f'click("{name}")',
-                                     element_id=it.get("id"), name=name,
-                                     bounds=it.get("bounds")))
+        if (it.get("type") or "").lower() == "text":
+            leftovers.append(c)  # texto estático: só se sobrar vaga
+        else:
+            cands.append(c)
         if len(cands) >= max_clicks:
             break
+    if len(cands) < max_clicks:
+        for c in leftovers:
+            if len(cands) >= max_clicks:
+                break
+            cands.append(c)
     cands.append(CandidateAction(kind="scroll", label="scroll_down"))
     cands.append(CandidateAction(kind="vision", label="vision_fallback"))
     cands.append(CandidateAction(kind="wait", label="wait"))
