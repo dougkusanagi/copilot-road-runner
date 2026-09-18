@@ -90,7 +90,11 @@ def _deterministic(step: int, instruction: str, ctx: dict) -> Action | None:
     if _has_any(instruction, CALC_WORDS):
         if step == 0:
             return Action(type="open", target="calc")
-        return None  # resto via UIA (Teste 2)
+        # UIA só vale na janela certa: garante foco antes de pontuar candidatos
+        if not _focused(["calculadora", "calculator"]) and ctx.get("cfocus", 0) < 2:
+            ctx["cfocus"] = ctx.get("cfocus", 0) + 1
+            return Action(type="focus", target="calculadora||calculator")
+        return None  # resto via UIA + scorer (Teste 2)
     if _has_any(instruction, BROWSER_WORDS):
         # Abre o Edge JÁ na URL da busca (confiável: evita autocomplete da
         # barra de endereços, que re-selecionava sugestão quebrada e dava 404).
@@ -184,8 +188,12 @@ def decide(instruction: str, step: int, ctx: dict, cfg: dict) -> tuple[Decision,
     t["uia_title"] = title
     t["uia_count"] = len(items)
 
+    # nunca pontua a janela errada: sem foco no alivo do teste, aborta honesto
+    if _has_any(instruction, CALC_WORDS) and "calcul" not in title.lower():
+        raise RuntimeError(f"foco saiu da calculadora (active={title!r}); abortando.")
+
     t2 = time.perf_counter()
-    cands = build_candidates(items)
+    cands = build_candidates(items, state_title=title)
     scored = _scorer.score(instruction, title, cands)
     t["scorer_ms"] = round((time.perf_counter() - t2) * 1000, 1)
     top = scored[0]

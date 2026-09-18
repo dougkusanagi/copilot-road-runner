@@ -154,17 +154,32 @@ JUNK_NAMES = {
     "non client input sink window",
 }
 
+# chrome da janela (minimizar/maximizar/fechar): nunca são alvo de clique
+CHROME_PREFIXES = ("minimizar ", "maximizar ", "restaurar ", "fechar ",
+                   "minimize ", "maximize ", "restore ", "close ")
+CHROME_BARE = {"minimizar", "maximizar", "restaurar", "fechar",
+               "minimize", "maximize", "restore", "close"}
 
-def build_candidates(items: list[dict], max_clicks: int = 12) -> list[CandidateAction]:
+
+def build_candidates(items: list[dict], state_title: str = "",
+                     max_clicks: int = 12) -> list[CandidateAction]:
     """Candidatos a partir do snapshot compacto [{id,name,type,bounds}]."""
     cands: list[CandidateAction] = []
     seen: set[str] = set()
+    skip_types = {"window", "titlebar", "menubar"}
     for it in items:
         name = (it.get("name") or "").strip()
         if not name or len(name) > 60:  # títulos longos (ex: aba de terminal) viram ruído
             continue
-        if name.lower() in seen or name.lower() in JUNK_NAMES:
+        nl = name.lower()
+        if nl in seen or nl in JUNK_NAMES or nl in CHROME_BARE:
             continue
+        if nl.startswith(CHROME_PREFIXES):
+            continue
+        if (it.get("type") or "").lower() in skip_types:
+            continue
+        if state_title and name.lower() == state_title.lower():
+            continue  # a própria janela nunca é alvo de clique
         seen.add(name.lower())
         cands.append(CandidateAction(kind="click", label=f'click("{name}")',
                                      element_id=it.get("id"), name=name,

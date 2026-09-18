@@ -44,9 +44,9 @@ def focus_window(title_substr: str, timeout: float = 8.0) -> bool:
 
     alts = [a.strip().lower() for a in title_substr.split("||") if a.strip()]
     t0 = time.perf_counter()
+    desk = Desktop(backend="uia")
     while time.perf_counter() - t0 < timeout:
         try:
-            desk = Desktop(backend="uia")
             matches = []
             for w in desk.windows(top_level_only=True, visible_only=True):
                 try:
@@ -65,6 +65,25 @@ def focus_window(title_substr: str, timeout: float = 8.0) -> bool:
         except Exception:
             pass
         time.sleep(0.5)
+    # 2ª passada: janela pode estar minimizada (inclui ocultas + restore)
+    try:
+        for w in desk.windows(top_level_only=True, visible_only=False):
+            try:
+                title = w.window_text() or ""
+                if not any(a in title.lower() for a in alts):
+                    continue
+                try:
+                    w.restore()
+                    time.sleep(0.4)
+                except Exception:
+                    pass
+                w.set_focus()
+                time.sleep(0.4)
+                return True
+            except Exception:
+                continue
+    except Exception:
+        pass
     return False
 
 
