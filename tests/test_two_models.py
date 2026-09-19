@@ -84,6 +84,17 @@ class TestPlannerPrompt(unittest.TestCase):
         self.assertIn("visual_action", sys)
         self.assertIn("uia_click", sys)
 
+    def test_proibe_url_profunda_inventada(self):
+        self.assertIn("NUNCA invente", planner.TOOLS_SPEC)
+        self.assertIn("NEVER jump straight to a deep", planner.PLANNER_SYSTEM)
+
+    def test_answer_no_spec_e_no_schema(self):
+        self.assertIn("answer", planner.TOOLS_SPEC)
+        self.assertIn("answer", planner.planner_json_schema()["properties"]["type"]["enum"])
+        dec = planner.PlannerDecision.model_validate({"type": "answer",
+                                                      "text": "R$ 12.499"})
+        self.assertEqual(dec.text, "R$ 12.499")
+
 
 class TestPlannerJson(unittest.TestCase):
     def test_limpo(self):

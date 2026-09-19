@@ -189,6 +189,8 @@ def _planner_to_action(dec: PlannerDecision) -> Action | None:
         return Action(type="hotkey", key=dec.keys or "")
     if t == "wait":
         return Action(type="wait", ms=dec.ms or 1000)
+    if t == "answer":
+        return Action(type="answer", text=dec.text or "")
     if t == "done":
         return Action(type="done")
     return None  # uia_click, visual_action
@@ -320,6 +322,13 @@ def done_allowed(hist_labels: list[str]) -> bool:
     return any(not h.startswith(_NO_OP_PREFIXES) for h in hist_labels)
 
 
+# Título de página de erro (observação, não decisão): o 1B ignorou
+# "Page Not Found - Brave" e repetiu a mesma URL 3x. Só fatos p/ o planner.
+_ERROR_TITLE_HINTS = ("not found", "404", "can't be reached", "cannot be reached",
+                      "unable to connect", "connection refused", "err_", "error",
+                      "problem loading", "isn't working", "is not working")
+
+
 def observe(action: Action, before_title: str, after_title: str,
             value: str = "") -> str:
     """Resultado da ação em texto curto p/ o planner (puro, testável).
@@ -332,6 +341,10 @@ def observe(action: Action, before_title: str, after_title: str,
         parts.append(f"window {before_title or '?'!r} -> {after_title!r}")
     else:
         parts.append(f"window {after_title or '?'!r}")
+    low = (after_title or "").lower()
+    if action.type == "open" and any(h in low for h in _ERROR_TITLE_HINTS):
+        parts.append("page title suggests an ERROR page: do NOT retry the "
+                     "same URL, go back to the site homepage or search")
     if action.type == "type" and action.text:
         if value and action.text.strip()[:40] in value:
             parts.append("text visible in focused field")
@@ -528,7 +541,7 @@ def run(instruction: str, cfg: dict) -> dict:
 
             src = dec.source
             if src == "planner" and dec.action.type in (
-                    "open", "focus", "type", "hotkey", "wait", "done"):
+                    "open", "focus", "type", "hotkey", "wait", "answer", "done"):
                 a = dec.action
                 arg = a.target or a.text or a.key or ""
                 emit("PLANNER", f'{a.type}("{arg}")',
@@ -593,8 +606,9 @@ def run(instruction: str, cfg: dict) -> dict:
                 label = (f'visual "{tm.get("planner_decision", {}).get("instruction", "")}"'
                          f" -> {va.get('type')}")
             if dec.action.type == "answer":
-                # observação textual do Vocaela: devolve ao planner, sem input
-                ctx["last_error"] = f"visão respondeu: {dec.action.text}"[:300]
+                # fato reportado (planner ou Vocaela): devolve ao planner, sem input
+                who = "planner" if src == "planner" else "visão"
+                ctx["last_error"] = f"{who} respondeu: {dec.action.text}"[:300]
 
             if dec.action.type == "done":
                 ctx["hist_labels"].append(label)

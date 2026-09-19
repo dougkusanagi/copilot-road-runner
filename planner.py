@@ -25,7 +25,7 @@ from pydantic import BaseModel, field_validator, model_validator
 
 PlannerActionType = Literal[
     "open_app", "open_url", "focus_window", "type_text", "press_key",
-    "hotkey", "uia_click", "visual_action", "wait", "done",
+    "hotkey", "uia_click", "visual_action", "wait", "answer", "done",
 ]
 
 # Tools que o planner pode escolher. uia_click = clicar por NOME acessível
@@ -33,7 +33,7 @@ PlannerActionType = Literal[
 # visual_action = "preciso enxergar" → screenshot vai SÓ p/ o Vocaela.
 TOOLS_SPEC = """\
 - {"type":"open_app","app":"notepad|calc|msedge|chrome|brave"} — abrir aplicativo
-- {"type":"open_url","url":"https://..."} — abrir URL no Edge
+- {"type":"open_url","url":"https://www.amazon.com"} — abrir a HOMEPAGE no navegador padrão. NUNCA invente caminho/produto (nada de /produto-x-y/): só domínio que você conhece; a navegação até a página certa é por busca/clique depois
 - {"type":"focus_window","target":"Google"} — focar janela cujo título CONTÉM o texto (só se essa janela existe; se o app não está aberto, use open_app/open_url)
 - {"type":"type_text","text":"..."} — digitar na janela focada
 - {"type":"press_key","key":"enter|esc|tab|f5"} — uma tecla
@@ -41,6 +41,7 @@ TOOLS_SPEC = """\
 - {"type":"uia_click","target":"nome do elemento"} — clicar elemento VISÍVEL na árvore de acessibilidade (prefira sempre que o elemento tiver nome, ex: botão "7" da calculadora)
 - {"type":"visual_action","instruction":"Click the blue Continue button"} — SÓ quando o elemento NÃO está na lista de UI elements (canvas, custom UI, ícone sem nome). Instruction em inglês, curta, com verbo + alvo. NUNCA inclua coordenadas.
 - {"type":"wait","ms":2000} — aguardar UI carregar
+- {"type":"answer","text":"R$ 12.499"} — reportar um fato que você OBSERVOU na tela (ex: o preço pedido); só depois de navegar até ele. Não conta como ação p/ concluir
 - {"type":"done"} — objetivo cumprido"""
 
 PLANNER_SYSTEM = """You are the planner of a local Windows computer-use agent. Think fast, output little.
@@ -57,6 +58,14 @@ Rules:
 - If the target app is not the current window: use focus_window ONLY when a
   window of that app is already open; otherwise use open_app (or open_url
   for a website). NEVER focus_window a target that already missed.
+- Web tasks, like a human, step by step:
+  1. open_app the requested browser (if it is already open, focus it);
+  2. hotkey ctrl+l, type the SITE homepage (https://www.amazon.com), press enter;
+  3. on the site, type in its search box + enter (uia_click/type/visual);
+  4. if lost or on an error page, go back to step 2 or search on google.
+  NEVER jump straight to a deep/product URL you guessed.
+- Use answer ONLY to report a fact you OBSERVED after navigating (e.g. the
+  price on the page); then say done.
 - NEVER repeat the same action twice in a row; if it did not advance, do something else.
 - Prefer uia_click when the target name appears in UI elements.
 - Use visual_action ONLY when the element is missing from UI elements.

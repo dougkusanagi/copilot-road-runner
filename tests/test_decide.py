@@ -128,6 +128,31 @@ class TestDecideStep(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             loop.decide("oi", 0, {}, CFG, planner=None, vocaela=None)
 
+    def test_answer_do_planner_vira_action(self):
+        self._patch_snapshot([], "Amazon.com", None)
+        dec, _ = loop.decide(
+            "qual o preço da rtx 5090", 3, {"hist_labels": ["type(rtx 5090) => window 'Amazon'"]},
+            CFG, planner=_FakePlanner(PlannerDecision(type="answer", text="R$ 12.499")),
+            vocaela=_NoVision())
+        self.assertEqual(dec.action.type, "answer")
+        self.assertEqual(dec.action.text, "R$ 12.499")
+        self.assertEqual(dec.source, "planner")
+
+    def test_observe_pagina_de_erro_diz_pra_voltar(self):
+        from schemas import Action
+
+        o = loop.observe(Action(type="open", target="url:https://www.amazon.com/x"),
+                         "PowerShell", "Page Not Found - Brave")
+        self.assertIn("ERROR page", o)
+        self.assertIn("do NOT retry the same URL", o)
+
+    def test_observe_pagina_ok_sem_hint_de_erro(self):
+        from schemas import Action
+
+        o = loop.observe(Action(type="open", target="url:https://www.amazon.com"),
+                         "PowerShell", "Amazon.com")
+        self.assertNotIn("ERROR page", o)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
