@@ -33,7 +33,7 @@ from actions import execute
 from obs import capture_for_vision
 from planner import MiniCPMPlanner, PlannerDecision
 from schemas import Action, Decision
-from uia import active_window_snapshot
+from uia import active_window_snapshot, focused_value
 from vocaela import VocaelaAdapter, visual_to_action
 
 LOG = Path("run.jsonl")
@@ -215,6 +215,11 @@ def _decide_planner(instruction: str, step: int, ctx: dict, cfg: dict,
         raise RuntimeError("visão desabilitada (no_vision); use uia_click, "
                            "type_text ou teclado.")
 
+    # guard 4: `done` só com evidência — ao menos uma ação real executada.
+    if dec.type == "done" and not done_allowed(ctx.get("hist_labels", [])):
+        raise RuntimeError("'done' recusado: nenhuma ação foi executada ainda; "
+                           "execute o objetivo antes de concluir.")
+
     try:
         native = _planner_to_action(dec)
     except ValueError as e:  # whitelist de app / URL inválida
@@ -274,13 +279,47 @@ def decide(instruction: str, step: int, ctx: dict, cfg: dict,
 
 
 # --- verify: observação passiva (NUNCA decide ação nem done) -------------------
-def verify(action: Action, instruction: str, cfg: dict) -> tuple[bool, str]:
-    """Espera curta + título da janela ativa, só p/ log. Não decide nada."""
+_NO_OP_PREFIXES = ("wait(", "answer(")
+
+
+def done_allowed(hist_labels: list[str]) -> bool:
+    """`done` exige ao menos uma ação executada que não seja wait/answer."""
+    return any(not h.startswith(_NO_OP_PREFIXES) for h in hist_labels)
+
+
+def observe(action: Action, before_title: str, after_title: str,
+            value: str = "") -> str:
+    """Resultado da ação em texto curto p/ o planner (puro, testável).
+
+    Só fatos observados: janela antes/depois, e p/ `type` se o texto
+    apareceu no campo focado. Nunca conclui "sucesso" do objetivo.
+    """
+    parts = []
+    if after_title and after_title != before_title:
+        parts.append(f"window {before_title or '?'!r} -> {after_title!r}")
+    else:
+        parts.append(f"window {after_title or '?'!r}")
+    if action.type == "type" and action.text:
+        if value and action.text.strip()[:40] in value:
+            parts.append("text visible in focused field")
+        elif value:
+            parts.append(f"focused field now: {value[:60]!r}")
+        else:
+            parts.append("focused field unreadable")
+    elif action.type in ("open", "focus") and after_title == before_title:
+        parts.append("no window change yet")
+    return "; ".join(parts)
+
+
+def verify(action: Action, instruction: str, cfg: dict,
+           before_title: str = "") -> tuple[bool, str]:
+    """Espera curta + observação (título, campo focado). Não decide nada."""
     time.sleep(max(0, int(cfg.get("verify_wait_ms", 500))) / 1000.0)
     if safety.stop_requested():
         return False, "aborted"
     _items, title, _ = active_window_snapshot()
-    return bool(title), f"active={title!r}"
+    value = focused_value() if action.type == "type" else ""
+    return bool(title), observe(action, before_title, title, value)
 
 
 def _key(a: Action) -> str:
@@ -476,13 +515,16 @@ def run(instruction: str, cfg: dict) -> dict:
             if dec.action.type == "answer":
                 # observação textual do Vocaela: devolve ao planner, sem input
                 ctx["last_error"] = f"visão respondeu: {dec.action.text}"[:300]
-            ctx["hist_labels"].append(label)
 
             if dec.action.type == "done":
+                ctx["hist_labels"].append(label)
                 result = "done"
                 break
 
-            ok, vnote = verify(dec.action, instruction, cfg)
+            ok, vnote = verify(dec.action, instruction, cfg,
+                               before_title=tm.get("uia_title", ""))
+            # o planner vê ação + resultado observado no histórico
+            ctx["hist_labels"].append(f"{label} => {vnote}")
             emit("VERIFY", vnote, "")
             metrics["steps"] += 1
             _log({"step": step, "source": dec.source, "confidence": dec.confidence,

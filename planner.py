@@ -56,6 +56,8 @@ Rules:
 - NEVER repeat the same action twice in a row; if it did not advance, do something else.
 - Prefer uia_click when the target name appears in UI elements.
 - Use visual_action ONLY when the element is missing from UI elements.
+- Each recent action shows its OBSERVED result after "=>" (window before/after,
+  whether typed text appeared). Use it: if the result shows no change, do not repeat.
 - Say "done" ONLY if recent actions cover EVERY part of the goal
   (e.g., a goal that asks to write text REQUIRES a type_text in recent actions).
 - Output ONLY the JSON object."""

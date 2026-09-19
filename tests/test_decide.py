@@ -89,6 +89,41 @@ class TestDecideStep(unittest.TestCase):
         self.assertEqual((dec.action.x, dec.action.y), (30, 30))
         self.assertEqual(tm.get("vision_calls", 0), 0)
 
+    def test_done_sem_acao_recusado(self):
+        # guard 4: planner diz done sem ter feito nada -> last_error, não done
+        self._patch_snapshot([], "Edge", None)
+        with self.assertRaises(RuntimeError):
+            loop.decide("abra o Edge", 2, {"hist_labels": []}, CFG,
+                        planner=_FakePlanner(PlannerDecision(type="done")),
+                        vocaela=_NoVision())
+        with self.assertRaises(RuntimeError):
+            loop.decide("abra o Edge", 2, {"hist_labels": ["wait(300ms) => window 'Edge'"]},
+                        CFG, planner=_FakePlanner(PlannerDecision(type="done")),
+                        vocaela=_NoVision())
+        dec, _ = loop.decide("abra o Edge", 2,
+                             {"hist_labels": ["opened msedge => window 'Edge'"]}, CFG,
+                             planner=_FakePlanner(PlannerDecision(type="done")),
+                             vocaela=_NoVision())
+        self.assertEqual(dec.action.type, "done")
+
+    def test_observe_e_done_allowed(self):
+        from schemas import Action
+
+        self.assertFalse(loop.done_allowed([]))
+        self.assertFalse(loop.done_allowed(["wait(1ms) => x", "answer(15)"]))
+        self.assertTrue(loop.done_allowed(["type(5 chars) => window 'Notepad'"]))
+
+        o = loop.observe(Action(type="open", target="notepad"), "Edge", "Bloco de Notas")
+        self.assertEqual(o, "window 'Edge' -> 'Bloco de Notas'")
+        o = loop.observe(Action(type="open", target="notepad"), "Edge", "Edge")
+        self.assertIn("no window change yet", o)
+        o = loop.observe(Action(type="type", text="Olá mundo"), "N", "N", "Olá mundo")
+        self.assertIn("text visible in focused field", o)
+        o = loop.observe(Action(type="type", text="Olá"), "N", "N", "outra coisa")
+        self.assertIn("focused field now: 'outra coisa'", o)
+        o = loop.observe(Action(type="type", text="Olá"), "N", "N", "")
+        self.assertIn("unreadable", o)
+
     def test_sem_modelos_erro_honesto(self):
         with self.assertRaises(RuntimeError):
             loop.decide("oi", 0, {}, CFG, planner=None, vocaela=None)

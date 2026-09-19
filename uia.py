@@ -6,6 +6,37 @@ import time
 MAX_DEPTH = 6
 
 
+def focused_value(max_len: int = 80) -> str:
+    """Valor/texto do elemento com foco de teclado (Edit/Document), best-effort.
+
+    Serve p/ o planner saber se `type_text` chegou onde devia. "" se não der.
+    """
+    try:
+        from pywinauto.controls.uiawrapper import UIAWrapper
+        from pywinauto.uia_defines import IUIA
+        from pywinauto.uia_element_info import UIAElementInfo
+
+        el = IUIA().iuia.GetFocusedElement()
+        w = UIAWrapper(UIAElementInfo(el))
+        val = ""
+        try:
+            val = w.iface_value.CurrentValue or ""
+        except Exception:
+            try:
+                val = w.legacy_properties().get("Value") or ""
+            except Exception:
+                val = ""
+        if not val:
+            try:
+                val = w.window_text() or ""
+            except Exception:
+                val = ""
+        val = " ".join(str(val).split())
+        return val[:max_len] + ("…" if len(val) > max_len else "")
+    except Exception:
+        return ""
+
+
 def active_window_snapshot(timeout: float = 5.0,
                            max_elements: int = 120) -> tuple[list[dict], str, tuple | None]:
     """Elementos úteis da janela ATIVA, formato compacto p/ decisão rápida.
