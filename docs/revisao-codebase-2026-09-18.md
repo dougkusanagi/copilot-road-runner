@@ -446,6 +446,13 @@ direção — o `ParseFile` do PowerShell e o `_render_wsb` → XML são o model
 
 ## 9. Roadmap priorizado
 
+> **Status (18/09, mesmo dia):** P0 C1–C7 e P1 C8–C15 implementados e commitados
+> (`5f55188`, `f0e843d`, `0b2b2b8`, `b09424f`) — 77 testes, `ruff` limpo, CI Windows.
+> Pendentes: §5.2 (verify com feedback), §5.3 (`done` condicionado), §5.4
+> (`json_schema`), §5.5 (contexto `tipo:nome`), §6.2 (run dir/dry-run), §6.3
+> (README com comandos dos `llama-server`, LICENSE — escolha do autor), §7 (harness),
+> §4.2/4.4/4.5 (invoker `-Reuse`/`-Prune`, cache por boot).
+
 | Prioridade | Item | Esforço | Seção |
 |---|---|---|---|
 | P0 | Reencodar 4 arquivos (mojibake/BOM) + teste anti-regressão + `.editorconfig`/`.gitattributes` | 1 h | C1, §6.1 |
