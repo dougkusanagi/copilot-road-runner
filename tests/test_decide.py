@@ -155,6 +155,29 @@ class TestDecideStep(unittest.TestCase):
                          "PowerShell", "Amazon.com")
         self.assertNotIn("ERROR page", o)
 
+    def test_observe_app_ja_ativo_manda_agir_dentro(self):
+        from schemas import Action
+
+        # run real 19/09: open(chrome) com 'Google Chrome' parado no seletor
+        # de perfil; "no window change yet" virava loop de reabrir.
+        o = loop.observe(Action(type="open", target="chrome"),
+                         "Google Chrome", "Google Chrome")
+        self.assertIn("already active", o)
+        self.assertIn("INSIDE", o)
+        self.assertNotIn("no window change yet", o)
+
+    def test_observe_focus_miss_mantem_sem_mudanca(self):
+        from schemas import Action
+
+        o = loop.observe(Action(type="focus", target="bloco de notas"),
+                         "Edge", "Edge")
+        self.assertIn("no window change yet", o)
+
+    def test_receita_cobre_seletor_de_perfil(self):
+        import planner
+
+        self.assertIn("profile/welcome/first-run picker", planner.PLANNER_SYSTEM)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

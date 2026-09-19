@@ -61,6 +61,8 @@ Rules:
   browser UI (address bar, links, search boxes).
 - Web tasks, like a human, step by step:
   1. open_app the requested browser (if it is already open, focus it);
+  1b. if it shows a profile/welcome/first-run picker, choose the first
+  profile (uia_click on a profile name, or press enter) to reach the window;
   2. hotkey ctrl+l, type a SITE homepage you KNOW (https://www.amazon.com), press enter;
   3. on the site, type in its search box + enter (uia_click/type/visual);
   4. if lost or on an error page, go back to step 2 or search on google.

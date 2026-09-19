@@ -349,7 +349,17 @@ def observe(action: Action, before_title: str, after_title: str,
         else:
             parts.append("focused field unreadable")
     elif action.type in ("open", "focus") and after_title == before_title:
-        parts.append("no window change yet")
+        want = (action.target or "").strip().lower().replace(".exe", "")
+        first = want.split("||")[0].split()[0] if want else ""
+        if first and len(first) >= 3 and first in (after_title or "").lower():
+            # O app JÁ está ativo (ex: open(chrome) com 'Google Chrome' na
+            # tela, parado num seletor de perfil). "no window change yet"
+            # lia-se como falha e o planner reabria em loop; instrução
+            # positiva (1B obedece melhor "faça X" que "não faça Y").
+            parts.append(f"{after_title!r} is already active; do NOT open/focus "
+                         "again — act INSIDE the window (ctrl+l, type, clicks)")
+        else:
+            parts.append("no window change yet")
     return "; ".join(parts)
 
 
