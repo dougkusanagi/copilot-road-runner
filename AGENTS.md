@@ -57,6 +57,12 @@ cada abertura é um ambiente limpo descartável.
   **gateway** (`HOST_IP`, preenchido pelo `bootstrap.ps1`).
 - `Invoke-SandboxTest.ps1` fecha o Sandbox em `finally` (timeout não
   pode deixar órfão); jobs ficam em `.sandbox-job\` (gitignored).
+  Mas matar só `WindowsSandboxClient` NÃO basta nesta máquina: o cliente
+  sai e ficam `WindowsSandboxServer` + `WindowsSandboxRemoteSession`
+  (órfão real em 18/09). O `finally` cobre os 3 nomes; abort externo
+  (Ctrl+C no host) não passa pelo `finally` — conferir órfãos com
+  `Get-Process *Sandbox*` e limpar `.sandbox-job\` à mão (pasta travada
+  = VM ainda viva; nunca matar `vmwp` às cegas — WSL usa outro).
 - Timeouts das ferramentas em ms; trial no Sandbox leva ~1 min
   (sem `-Bootstrap`).
 

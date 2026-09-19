@@ -132,7 +132,10 @@ try {
     }
 } finally {
     if (-not $KeepOpen) {
-        Get-Process -Name "WindowsSandboxClient" -ErrorAction SilentlyContinue |
+        # Nomes reais vistos no host (só "WindowsSandboxClient" deixou
+        # orfao aqui: o cliente saiu e Server/RemoteSession ficaram).
+        Get-Process -Name "WindowsSandboxClient", "WindowsSandboxServer",
+            "WindowsSandboxRemoteSession" -ErrorAction SilentlyContinue |
             Stop-Process -Force -ErrorAction SilentlyContinue
     }
 }

@@ -147,7 +147,9 @@ class TestSandboxAgent(unittest.TestCase):
         for needle in ("command.ps1", "done.marker", "started.marker",
                        "exitcode.txt", "stdout.log", "stderr.log",
                        "TimeoutSec", "-Bootstrap", "-KeepOpen", "-NoThrow",
-                       "WindowsSandboxClient", "crr-agent.local.wsb",
+                       "WindowsSandboxClient", "WindowsSandboxServer",
+                       "WindowsSandboxRemoteSession",
+                       "crr-agent.local.wsb",
                        "MappedFolder", "agent.ps1"):
             self.assertIn(needle, src, f"trecho ausente: {needle}")
 

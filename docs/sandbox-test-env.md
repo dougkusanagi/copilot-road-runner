@@ -105,7 +105,8 @@ Protocolo (`.sandbox-job\<id>\` ↔ `C:\job`):
 | `HOST_IP` não resolvido | `bootstrap.ps1` não achou o gateway → rode `Get-NetRoute -DestinationPrefix "0.0.0.0/0"` no Sandbox e edite `config.sandbox.json` à mão |
 | winget lento na primeira abertura | normal: Python+uv instalam a cada boot (Sandbox não tem snapshot); deixe o `bootstrap.ps1` terminar |
 | job do agente sem resposta | `Invoke-SandboxTest.ps1` estourou `-TimeoutSec` → aumente o timeout; com `-KeepOpen`, abra o Sandbox e leia `C:\job\out\` |
-| job sem nem `started.marker` | `LogonCommand` não rodou (boot/logon travou) → feche o Sandbox e rode de novo;timeout também fecha o Sandbox sozinho |
+| job sem nem `started.marker` | `LogonCommand` não rodou (boot/logon travou) → feche o Sandbox e rode de novo; timeout também fecha o Sandbox sozinho (abort externo/Ctrl+C não — conferir órfãos com `Get-Process *Sandbox*`) |
+| Sandbox órfão (Server/RemoteSession vivos, sem janela) | `finally` matava só `WindowsSandboxClient` → corrigido p/ cobrir os 3 nomes; órfão antigo: `Stop-Process -Name WindowsSandboxServer,WindowsSandboxRemoteSession`; pasta do job fica travada até a VM morrer (nunca matar `vmwp` às cegas — WSL usa outro) |
 | `.sandbox-job\` crescendo | jobs antigos não são apagados sozinhos → limpe a pasta de vez em quando |
 | Sandbox não abre | recurso desabilitado ou sem virtualização → habilite Windows Sandbox + VT-x/AMD-V na BIOS |
 | Clique deslocado no Sandbox | escala de DPI ≠ 100% no Sandbox — fixe 100% |
