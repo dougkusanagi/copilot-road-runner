@@ -4,14 +4,14 @@
 
 .DESCRIPTION
     Canal via pasta mapeada (.sandbox-job\<id> <-> C:\job), sem admin
-    (exceto -OpenModelPorts) e sem remote shell — o Sandbox nao expoe
-    WinRM; o agent.ps1 (LogonCommand) executa in\command.ps1 e o host
+    (exceto -OpenModelPorts) e sem WinRM/SSH. A CLI oficial wsb.exe
+    inicia/conecta o Sandbox e dispara agent.ps1 no ExistingLogin; o host
     aguarda out\done.marker ate -TimeoutSec.
 
     Fluxo:
       1. escreve .sandbox-job\<id>\in\command.ps1;
       2. gera sandbox\crr-agent.local.wsb (repo->C:\crr, job->C:\job);
-      3. abre o Sandbox e aguarda o done.marker;
+      3. abre via wsb start/connect, executa o agente e aguarda o marker;
       4. imprime stdout/stderr; throw se exitcode <> 0 (sem -NoThrow);
       5. fecha o Sandbox, salvo -KeepOpen (debug: conecte e inspecione).
 
@@ -44,8 +44,17 @@ param(
 $ErrorActionPreference = "Stop"
 
 if ($WhatIfPreference) {
-    Write-Host "WhatIf: geraria o job + .wsb e abriria o Sandbox."
+    Write-Host "WhatIf: geraria o job + .wsb e abriria via wsb.exe."
     return
+}
+
+if (-not (Get-Command wsb.exe -ErrorAction SilentlyContinue)) {
+    throw "sandbox: wsb.exe ausente (a CLI requer Windows 11 24H2+)."
+}
+
+$alreadyRunning = (wsb list --raw | ConvertFrom-Json).WindowsSandboxEnvironments
+if ($alreadyRunning.Count -gt 0) {
+    throw "sandbox: ja existe uma instancia ativa; feche-a antes do teste."
 }
 
 $Repo = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
@@ -59,10 +68,6 @@ Set-Content -LiteralPath (Join-Path $InDir "command.ps1") `
     -Value $Command -Encoding UTF8
 
 $Wsb = Join-Path $Repo "sandbox\crr-agent.local.wsb"
-$logon = "powershell -ExecutionPolicy Bypass -NoExit -File " +
-    "C:\crr\sandbox\agent.ps1 -JobDir C:\job"
-if ($Bootstrap) { $logon += " -Bootstrap" }
-
 $Template = @'
 <Configuration>
   <MappedFolders>
@@ -77,16 +82,13 @@ $Template = @'
       <ReadOnly>false</ReadOnly>
     </MappedFolder>
   </MappedFolders>
-  <LogonCommand>
-    <Command>__LOGON__</Command>
-  </LogonCommand>
   <MemoryInMB>__MEMORY__</MemoryInMB>
 </Configuration>
 '@
 
 if ($PSCmdlet.ShouldProcess($Wsb, "Gerar .wsb do agente")) {
     $xml = $Template.Replace("__REPO__", $Repo).Replace("__JOB__", $JobDir)
-    $xml = $xml.Replace("__LOGON__", $logon).Replace("__MEMORY__", "$MemoryMB")
+    $xml = $xml.Replace("__MEMORY__", "$MemoryMB")
     $parsed = [xml]$xml  # falha aqui se o template quebrar
     $null = $parsed
     Set-Content -LiteralPath $Wsb -Value $xml -Encoding UTF8
@@ -112,19 +114,46 @@ if ($OpenModelPorts) {
     }
 }
 
-if ($PSCmdlet.ShouldProcess($Wsb, "Abrir Windows Sandbox p/ job $JobId")) {
-    Invoke-Item -LiteralPath $Wsb
-}
-
 $done = Join-Path $OutDir "done.marker"
+$sandboxId = $null
 try {
+    if ($PSCmdlet.ShouldProcess($Wsb, "Abrir Windows Sandbox p/ job $JobId")) {
+        $started = wsb start --config $xml --raw | ConvertFrom-Json
+        $sandboxId = $started.Id
+        if (-not $sandboxId) { throw "sandbox: wsb start nao devolveu um ID." }
+        Start-Process -FilePath "wsb.exe" -ArgumentList @(
+            "connect", "--id", $sandboxId) | Out-Null
+
+        $agent = "cmd.exe /d /c start `"`" powershell.exe -NoProfile " +
+            "-ExecutionPolicy Bypass -File C:\crr\sandbox\agent.ps1 " +
+            "-JobDir C:\job"
+        if ($Bootstrap) { $agent += " -Bootstrap" }
+
+        # ExistingLogin so pyautogui/UIA enxerguem o desktop interativo.
+        # A sessao pode levar alguns segundos para ficar pronta apos connect.
+        $execDeadline = (Get-Date).AddSeconds(90)
+        $dispatched = $false
+        do {
+            Start-Sleep -Seconds 2
+            $raw = wsb exec --id $sandboxId --command $agent `
+                --run-as ExistingLogin --raw 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                $result = $raw | ConvertFrom-Json
+                $dispatched = ($result.ExitCode -eq 0)
+            }
+        } while (-not $dispatched -and (Get-Date) -lt $execDeadline)
+        if (-not $dispatched) {
+            throw "sandbox: ExistingLogin nao ficou pronto em 90s."
+        }
+    }
+
     $elapsed = 0
     while (-not (Test-Path -LiteralPath $done)) {
         if ($elapsed -ge $TimeoutSec) {
             $have = (Get-ChildItem -LiteralPath $OutDir -Name `
                 -ErrorAction SilentlyContinue) -join ", "
             throw ("sandbox: timeout apos {0}s (job {1}; out: [{2}]; " +
-                "sem started.marker = LogonCommand nao rodou)") `
+                "sem started.marker = agente nao iniciou)") `
                 -f $TimeoutSec, $JobId, $have
         }
         Start-Sleep -Seconds 3
@@ -132,11 +161,9 @@ try {
     }
 } finally {
     if (-not $KeepOpen) {
-        # Nomes reais vistos no host (só "WindowsSandboxClient" deixou
-        # orfao aqui: o cliente saiu e Server/RemoteSession ficaram).
-        Get-Process -Name "WindowsSandboxClient", "WindowsSandboxServer",
-            "WindowsSandboxRemoteSession" -ErrorAction SilentlyContinue |
-            Stop-Process -Force -ErrorAction SilentlyContinue
+        if ($sandboxId) {
+            wsb stop --id $sandboxId --raw 2>$null | Out-Null
+        }
     }
 }
 

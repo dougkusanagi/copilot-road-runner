@@ -35,8 +35,9 @@ não só em `127.0.0.1` — o Sandbox alcança o host pelo gateway.
 .\scripts\Start-Sandbox.ps1
 ```
 
-O `LogonCommand` do `.wsb` executa `sandbox\bootstrap.ps1` sozinho
-dentro do Sandbox: instala Python 3.12 + `uv` (via winget), roda
+O launcher usa a CLI oficial `wsb.exe`: `start` cria a VM, `connect` abre
+a sessão e `exec -r ExistingLogin` inicia `sandbox\bootstrap.ps1` dentro
+do Sandbox. Ele instala Python 3.12 + `uv` (via winget), roda
 `uv sync`, detecta o IP do host (gateway da rota default) e gera
 `config.sandbox.json` a partir de `sandbox\config.sandbox.example.json`.
 
@@ -63,8 +64,9 @@ Fechou o Sandbox, tudo é descartado — abra de novo para a próxima bateria li
 
 ## Testes executados pelo agente (eu rodo no Sandbox)
 
-O Sandbox não expõe WinRM/SSH, então o canal é pasta mapeada:
-o host escreve o comando, o `agent.ps1` (via `LogonCommand`) executa
+O Sandbox não expõe WinRM/SSH, então o canal de dados é pasta mapeada:
+o host escreve o comando e usa `wsb exec -r ExistingLogin` para iniciar
+o `agent.ps1`; ele executa
 e o host aguarda o `done.marker`.
 
 ```powershell
@@ -88,7 +90,7 @@ Protocolo (`.sandbox-job\<id>\` ↔ `C:\job`):
 | sandbox → host | `out\stdout.log` / `out\stderr.log` | saída capturada |
 | sandbox → host | `out\exitcode.txt` | `0` = ok; `124` = timeout do job (via `$LASTEXITCODE` no wrapper) |
 | sandbox → host | `out\done.marker` | sinal de conclusão (host faz poll até `-TimeoutSec`) |
-| sandbox → host | `out\started.marker` | heartbeat: prova que o `LogonCommand` rodou |
+| sandbox → host | `out\started.marker` | heartbeat: prova que o `wsb exec` iniciou o agente |
 
 ## Salvaguardas
 
@@ -105,9 +107,10 @@ Protocolo (`.sandbox-job\<id>\` ↔ `C:\job`):
 | `HOST_IP` não resolvido | `bootstrap.ps1` não achou o gateway → rode `Get-NetRoute -DestinationPrefix "0.0.0.0/0"` no Sandbox e edite `config.sandbox.json` à mão |
 | winget lento na primeira abertura | normal: Python+uv instalam a cada boot (Sandbox não tem snapshot); deixe o `bootstrap.ps1` terminar |
 | job do agente sem resposta | `Invoke-SandboxTest.ps1` estourou `-TimeoutSec` → aumente o timeout; com `-KeepOpen`, abra o Sandbox e leia `C:\job\out\` |
-| job sem nem `started.marker` | `LogonCommand` não rodou (boot/logon travou) → feche o Sandbox e rode de novo; timeout também fecha o Sandbox sozinho (abort externo/Ctrl+C não — conferir órfãos com `Get-Process *Sandbox*`) |
-| `LogonCommand` nunca dispara (mapeamento ok, nenhum console abre) | confirmado nesta máquina em 18/09 (manual e automático) → fallback: abra o Sandbox e rode à mão no PowerShell de dentro: `powershell -ExecutionPolicy Bypass -File C:\crr\sandbox\bootstrap.ps1` (ou `agent.ps1 -JobDir C:\job` num `.wsb` de agente) |
-| Sandbox órfão (Server/RemoteSession vivos, sem janela) | `finally` matava só `WindowsSandboxClient` → corrigido p/ cobrir os 3 nomes; órfão antigo: `Stop-Process -Name WindowsSandboxServer,WindowsSandboxRemoteSession`; pasta do job fica travada até a VM morrer (nunca matar `vmwp` às cegas — WSL usa outro) |
+| job sem nem `started.marker` | `wsb exec` não iniciou o agente ou ele falhou antes do heartbeat; confira o erro do invoker e `C:\job\out\` |
+| `LogonCommand` nunca dispara (mapeamento ok, nenhum console abre) | regressão confirmada nesta máquina (Windows 11 25H2 build 26200.9457). O protocolo não depende mais dele: usa `wsb start/connect/exec/stop` (CLI disponível desde 24H2). |
+| Sandbox órfão (Server/RemoteSession vivos, sem janela) | o invoker atual encerra pelo ID com `wsb stop`; para órfão antigo, obtenha o ID com `wsb list --raw` e use `wsb stop --id ID` (nunca matar `vmwp` às cegas — WSL usa outro) |
+| `sandbox: ja existe uma instancia ativa` | só um Sandbox por vez; feche a sessão existente. O invoker não encerra uma instância que não criou. |
 | `.sandbox-job\` crescendo | jobs antigos não são apagados sozinhos → limpe a pasta de vez em quando |
 | Sandbox não abre | recurso desabilitado ou sem virtualização → habilite Windows Sandbox + VT-x/AMD-V na BIOS |
 | Clique deslocado no Sandbox | escala de DPI ≠ 100% no Sandbox — fixe 100% |

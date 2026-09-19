@@ -4,9 +4,9 @@
 
 .DESCRIPTION
     Gera sandbox\crr.local.wsb (local, ignorado pelo git) com o caminho
-    real do repo e abre o Sandbox. O LogonCommand do .wsb executa
-    C:\crr\sandbox\bootstrap.ps1 sozinho: instala Python+uv, roda
-    `uv sync` e preenche o IP do host no config.
+    real do repo e abre o Sandbox pela CLI oficial wsb.exe. Depois de
+    conectar a sessao interativa, wsb exec inicia bootstrap.ps1 no
+    ExistingLogin: instala Python+uv, roda `uv sync` e preenche o IP.
 
     Topologia: o agente roda DENTRO do sandbox; os modelos
     (llama-server: planner 8091 + vision 8082) ficam no HOST com GPU.
@@ -31,6 +31,15 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+if (-not (Get-Command wsb.exe -ErrorAction SilentlyContinue)) {
+    throw "sandbox: wsb.exe ausente (a CLI requer Windows 11 24H2+)."
+}
+
+$alreadyRunning = (wsb list --raw | ConvertFrom-Json).WindowsSandboxEnvironments
+if ($alreadyRunning.Count -gt 0) {
+    throw "sandbox: ja existe uma instancia ativa; feche-a antes de abrir outra."
+}
+
 $Repo = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 $Wsb = Join-Path $Repo "sandbox\crr.local.wsb"
 
@@ -43,9 +52,6 @@ $Template = @'
       <ReadOnly>false</ReadOnly>
     </MappedFolder>
   </MappedFolders>
-  <LogonCommand>
-    <Command>powershell -ExecutionPolicy Bypass -NoExit -File C:\crr\sandbox\bootstrap.ps1</Command>
-  </LogonCommand>
   <MemoryInMB>__MEMORY__</MemoryInMB>
 </Configuration>
 '@
@@ -77,8 +83,30 @@ if ($OpenModelPorts) {
     }
 }
 
-if ($PSCmdlet.ShouldProcess($Wsb, "Abrir Windows Sandbox")) {
-    Invoke-Item -LiteralPath $Wsb
+if ($PSCmdlet.ShouldProcess($Wsb, "Abrir Windows Sandbox via wsb.exe")) {
+    $started = wsb start --config $xml --raw | ConvertFrom-Json
+    $sandboxId = $started.Id
+    if (-not $sandboxId) { throw "sandbox: wsb start nao devolveu um ID." }
+    Start-Process -FilePath "wsb.exe" -ArgumentList @(
+        "connect", "--id", $sandboxId) | Out-Null
+
+    $bootstrap = "cmd.exe /d /c start `"`" powershell.exe -NoProfile " +
+        "-ExecutionPolicy Bypass -NoExit -File C:\crr\sandbox\bootstrap.ps1"
+    $deadline = (Get-Date).AddSeconds(90)
+    $dispatched = $false
+    do {
+        Start-Sleep -Seconds 2
+        $raw = wsb exec --id $sandboxId --command $bootstrap `
+            --run-as ExistingLogin --raw 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            $result = $raw | ConvertFrom-Json
+            $dispatched = ($result.ExitCode -eq 0)
+        }
+    } while (-not $dispatched -and (Get-Date) -lt $deadline)
+    if (-not $dispatched) {
+        wsb stop --id $sandboxId --raw 2>$null | Out-Null
+        throw "sandbox: ExistingLogin nao ficou pronto em 90s."
+    }
 }
 
 Write-Host ""

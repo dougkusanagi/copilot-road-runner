@@ -55,20 +55,17 @@ cada abertura é um ambiente limpo descartável.
   `-Command '...'` (aspas simples) para `$env:` não expandir no host.
 - Host alcança modelos em `127.0.0.1:8091/8082`; no Sandbox o host é o
   **gateway** (`HOST_IP`, preenchido pelo `bootstrap.ps1`).
-- `Invoke-SandboxTest.ps1` fecha o Sandbox em `finally` (timeout não
-  pode deixar órfão); jobs ficam em `.sandbox-job\` (gitignored).
-  Mas matar só `WindowsSandboxClient` NÃO basta nesta máquina: o cliente
-  sai e ficam `WindowsSandboxServer` + `WindowsSandboxRemoteSession`
-  (órfão real em 18/09). O `finally` cobre os 3 nomes; abort externo
-  (Ctrl+C no host) não passa pelo `finally` — conferir órfãos com
-  `Get-Process *Sandbox*` e limpar `.sandbox-job\` à mão (pasta travada
-  = VM ainda viva; nunca matar `vmwp` às cegas — WSL usa outro).
-- `LogonCommand` do `.wsb` NÃO dispara nesta máquina (confirmado manual
-  em 18/09: `C:\crr` mapeia e aparece no Explorer, mas nenhum console abre
-  sozinho — nem `bootstrap.ps1`, nem `agent.ps1`). Canal automático do
-  agente inoperante aqui; fallback = abrir o Sandbox e rodar o script à
-  mão no PowerShell de dentro (`bootstrap.ps1` ou `agent.ps1 -JobDir`).
-  Só um Sandbox por vez — fechar o manual antes de qualquer trial meu.
+- `Invoke-SandboxTest.ps1` fecha em `finally` pelo ID com `wsb stop`
+  (timeout não deixa órfão); jobs ficam em `.sandbox-job\` (gitignored).
+  Histórico: matar só `WindowsSandboxClient` deixou Server/RemoteSession
+  órfãos em 18/09. Para instância antiga use `wsb list --raw` +
+  `wsb stop --id ID`; nunca matar `vmwp` às cegas — WSL usa outro.
+- `LogonCommand` do `.wsb` NÃO dispara nesta máquina (Windows 11 Pro 25H2
+  build 26200.9457; confirmado manual em 18/09). Não depender dele:
+  `Start-Sandbox.ps1` e `Invoke-SandboxTest.ps1` usam a CLI oficial
+  `wsb start/connect/exec -r ExistingLogin/stop`. Smoke test do ciclo
+  completo passou. Só um Sandbox por vez; os scripts recusam iniciar se
+  já houver uma instância, e encerram pelo ID apenas a que criaram.
 - Timeouts das ferramentas em ms; trial no Sandbox leva ~1 min
   (sem `-Bootstrap`).
 

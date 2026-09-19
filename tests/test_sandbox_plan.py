@@ -39,7 +39,6 @@ def _render_template(ps1_path: Path, memory: int = 4096) -> str:
     tpl = src[start:end].strip()
     return (tpl.replace("__REPO__", str(ROOT))
                .replace("__JOB__", str(ROOT / ".sandbox-job" / "x"))
-               .replace("__LOGON__", "agent")
                .replace("__MEMORY__", str(memory)))
 
 
@@ -94,7 +93,8 @@ class TestSandboxScripts(unittest.TestCase):
         self.assertNotIn("#Requires -RunAsAdministrator", src)
         self.assertIn("SupportsShouldProcess", src)  # -WhatIf
         for needle in ("crr.local.wsb", "MappedFolder", "SandboxFolder",
-                       "LogonCommand", "bootstrap.ps1", "MemoryInMB",
+                       "wsb start", "wsb exec", "ExistingLogin",
+                       "bootstrap.ps1", "MemoryInMB",
                        "__REPO__", "__MEMORY__", "8091", "8082",
                        "-OpenModelPorts"):
             self.assertIn(needle, src, f"trecho ausente: {needle}")
@@ -105,8 +105,7 @@ class TestSandboxScripts(unittest.TestCase):
         self.assertEqual(root.tag, "Configuration")
         host = root.find("./MappedFolders/MappedFolder/HostFolder")
         self.assertEqual(host.text, str(ROOT))
-        cmd = root.find("./LogonCommand/Command").text
-        self.assertIn("bootstrap.ps1", cmd)
+        self.assertIsNone(root.find("./LogonCommand"))
         mem = root.find("./MemoryInMB").text
         self.assertEqual(mem, "4096")
 
@@ -147,8 +146,8 @@ class TestSandboxAgent(unittest.TestCase):
         for needle in ("command.ps1", "done.marker", "started.marker",
                        "exitcode.txt", "stdout.log", "stderr.log",
                        "TimeoutSec", "-Bootstrap", "-KeepOpen", "-NoThrow",
-                       "WindowsSandboxClient", "WindowsSandboxServer",
-                       "WindowsSandboxRemoteSession",
+                       "wsb start", '"connect"', "wsb exec", "wsb stop",
+                       "ExistingLogin",
                        "crr-agent.local.wsb",
                        "MappedFolder", "agent.ps1"):
             self.assertIn(needle, src, f"trecho ausente: {needle}")
@@ -160,12 +159,10 @@ class TestSandboxAgent(unittest.TestCase):
         sandboxes = [f.find("SandboxFolder").text for f in folders]
         self.assertIn("C:\\crr", sandboxes)
         self.assertIn("C:\\job", sandboxes)
-        # __LOGON__ vira o comando do agent.ps1 em runtime; o template
-        # guarda o placeholder e o script monta o comando com agent.ps1
-        cmd = root.find("./LogonCommand/Command").text
-        self.assertEqual(cmd, "agent")
+        self.assertIsNone(root.find("./LogonCommand"))
         src = INVOKER.read_text(encoding="utf-8")
-        self.assertIn("C:\\crr\\sandbox\\agent.ps1 -JobDir C:\\job", src)
+        self.assertIn("C:\\crr\\sandbox\\agent.ps1", src)
+        self.assertIn("-JobDir C:\\job", src)
 
     def test_agent_inbox_outbox_e_timeout(self):
         src = AGENT.read_text(encoding="utf-8")
