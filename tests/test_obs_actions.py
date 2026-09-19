@@ -188,17 +188,18 @@ class TestToolsWhitelist(unittest.TestCase):
     def test_open_relata_janela_ativa(self):
         orig = self.tools.focus_window
         seen = {}
-        self.tools.focus_window = lambda hint, timeout=2.0: seen.update(hint=hint) or True
+        self.tools.focus_window = lambda hint, timeout: seen.update(hint=hint, timeout=timeout) or True
         try:
             d = self.tools.open_app("chrome")
         finally:
             self.tools.focus_window = orig
         self.assertIn("(janela ativa)", d)
         self.assertEqual(seen["hint"], "chrome")
+        self.assertGreaterEqual(seen["timeout"], 10)  # cold start: espera de verdade
 
     def test_open_relata_sem_primeiro_plano(self):
         orig = self.tools.focus_window
-        self.tools.focus_window = lambda hint, timeout=2.0: False
+        self.tools.focus_window = lambda hint, timeout: False
         try:
             d = self.tools.open_app("chrome")
         finally:

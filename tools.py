@@ -33,8 +33,8 @@ def open_app(target: str) -> str:
     (teclado/mouse/tela). Nunca usa shell=True: sem injeção via `&`, `"` ou `%`.
 
     Lançar ≠ estar em primeiro plano (cold start lento, foreground-lock do
-    Windows): por isso tenta o focus em seguida e RELATA o resultado —
-    o planner precisa saber se a janela está ativa antes de agir dentro dela.
+    Windows): por isso aguarda a janela (polling generoso — Chrome com
+    perfis pode levar >10s) e RELATA o resultado.
     """
     key = target.strip().lower()
     exe = APP_COMMANDS.get(key)
@@ -43,7 +43,7 @@ def open_app(target: str) -> str:
                          f"use um de {sorted(set(APP_COMMANDS.values()))}")
     _launch(exe)
     time.sleep(1.2)
-    if focus_window(_FOCUS_HINTS.get(key, key), timeout=2.0):
+    if focus_window(_FOCUS_HINTS.get(key, key), timeout=15.0):
         return f"opened {exe} (janela ativa)"
     return f"opened {exe} (janela ainda não em primeiro plano)"
 
