@@ -36,6 +36,20 @@ uv run python main.py "abra o Edge e busque preço RTX 4060" --max-steps 4
 uv run python main.py "..." --config config.sandbox.json --max-steps 4
 ```
 
+## Tray + janela Spotlight + ditado (opcional)
+
+```bash
+uv sync --extra ui          # pywebview, pystray, faster-whisper, sounddevice
+uv run python main.py --ui  # ícone na bandeja; ctrl+alt+space mostra/esconde
+```
+
+Caixa de texto + **Enviar** + **microfone**: o texto aparece enquanto você fala
+(faster-whisper `base` int8, ~74 MB, baixado na 1ª vez); durante a gravação há
+**Parar** (texto fica na caixa para corrigir) e **Enviar**; silêncio de 1,5 s
+envia sozinho (`stt.auto_send`). A janela se esconde enquanto o agente age.
+Config em `config.json` → seções `ui` e `stt` (modelo `tiny|base|small`,
+`silence_ms`, `hotkey`).
+
 ## Segurança
 
 - Pressione **Ctrl+Alt+Esc** (`stop_hotkey` no `config.json`) para abortar o loop;

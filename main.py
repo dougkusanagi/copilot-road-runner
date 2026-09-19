@@ -71,6 +71,8 @@ def main() -> None:
     ap.add_argument("--vision-url", default=None, help="override de vision.base_url")
     ap.add_argument("--locate", default="",
                     help='dry-run Vocaela: --locate "Click the address bar"')
+    ap.add_argument("--ui", action="store_true",
+                    help="tray + janela Spotlight com ditado (requer: uv sync --extra ui)")
     args = ap.parse_args()
 
     cfg = cfgmod.load(args.config)
@@ -104,6 +106,17 @@ def main() -> None:
 
     if args.locate:
         locate_only(args.locate, cfg)
+        return
+
+    if args.ui:
+        try:
+            import webview  # noqa: F401
+        except ImportError:
+            print("UI indisponível: instale o extra `ui` (uv sync --extra ui).")
+            raise SystemExit(2)
+        from app import App
+
+        App(cfg).run()
         return
 
     instruction = args.instruction.strip()

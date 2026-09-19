@@ -471,6 +471,48 @@ direção — o `ParseFile` do PowerShell e o `_render_wsb` → XML são o model
 | P2 | Diretório por run com prompts/respostas; `--dry-run`; `--replay` | 4 h | §6.2 |
 | P2 | `-Reuse`/`-Force`/`-Prune` no invoker; cache de Python/uv por boot | 3 h | §4.2, §4.4, §4.5 |
 | P3 | `Config` pydantic; `httpx.Client` reutilizado + retry/backoff; timeouts menores | 3 h | §3, §5.6 |
+| **P1 (novo)** | Tray (`pystray`) + janela Spotlight (`pywebview`) + hotkey global; extra `ui` | 4 h | §10 |
+| **P1 (novo)** | Ditado ao vivo `stt.py` (faster-whisper int8, parciais, silêncio → envio) | 4 h | §10 |
+
+## 10. Adição ao plano — ícone na tray + janela Spotlight + ditado ao vivo
+
+> Pedido em 18/09: "ícone na tray e uma interface minimalista como o Spotlight
+> com caixa de texto + botão enviar + botão de voz". Esclarecido: o botão de voz
+> é **STT (ditado)** — o texto aparece **enquanto** o usuário fala; durante a
+> gravação há dois botões (**Parar** → o texto fica na caixa, editável;
+> **Enviar**); silêncio por alguns segundos envia sozinho.
+
+### 10.1 Decisões
+
+| Tema | Decisão | Motivo |
+|---|---|---|
+| UI | **pywebview** (WebView2 do Win11) para a janela + **pystray** para a tray | Visual Spotlight em HTML/CSS sem gambiarra de `ctypes`; ~30–50 MB; `pystray` só precisa de Pillow (já dep). PySide6 (+100–150 MB) foge do "ultraleve"; tkinter puro exige `DwmSetWindowAttribute` p/ cantos/sombra. Fontes: <https://pywebview.flowrl.com/examples/pystray_icon>, <https://github.com/moses-palmer/pystray> |
+| Threading | `webview.start()` bloqueia a thread principal; `pystray.Icon.run()` em thread daemon; agente (`loop.run`) em thread própria; `window.evaluate_js` é thread-safe p/ empurrar log/parciais | Padrão do exemplo oficial pywebview+pystray |
+| Hotkey global | `ctrl+alt+space` (config `ui.hotkey`) via `keyboard` (já dep) mostra/esconde a janela | Não colide com `alt+space` (menu da janela) nem com `ctrl+alt+esc` do stop |
+| STT | **faster-whisper** (CTranslate2, `int8`, modelo `base` por padrão, `small` opcional) via adapter `stt.py` | Melhor relação qualidade pt-BR × tamanho (`base` ~74 MB, ~0,3–0,6 s por frase em CPU) sem torch; VAD Silero embutido (`vad_filter`). Vosk pt-BR (~45 MB) tem parciais nativas mas qualidade inferior; sherpa-onnx SenseVoice (~100 MB) é ótimo mas offline (sem parciais). Fontes: <https://github.com/SYSTRAN/faster-whisper>, <https://github.com/alphacep/vosk-api>, <https://github.com/k2-fsa/sherpa-onnx> |
+| "Ao vivo" | Whisper não é streaming: a cada ~1 s retranscreve o buffer da fala atual (≤ 30 s) e mostra como **parcial**; ao detectar silêncio (RMS abaixo do limiar por `stt.silence_ms`, padrão 1500) faz a transcrição **final** e, se `stt.auto_send`, envia | Técnica usada pelos apps de ditado local; custo aceitável com `base int8` |
+| Dependências | extra opcional `ui` no `pyproject` (`uv sync --extra ui`) | O Sandbox e a CLI continuam leves; `bootstrap.ps1` não instala a UI |
+| Microfone | `sounddevice` (PortAudio embutido na wheel), 16 kHz mono float32 | Zero setup no Windows |
+| Isolamento | A janela **se esconde** antes de o agente agir (`loop.run`) e reaparece no fim; nunca aparece nos screenshots do Vocaela nem rouba foco | Mesma regra do overlay |
+
+### 10.2 Alternativas registradas (não escolhidas)
+
+- TTS (leitura do resultado) não foi pedido; se um dia for: Piper `pt_BR-faber` (~20–60 MB, RTF < 0,05, fork ativo `OHF-Voice/piper1-gpl` é GPL-3) ou Kokoro-82M ONNX (vozes `pf_dora`/`pm_alex`, Apache 2.0, ~330 MB). Fontes: <https://github.com/OHF-Voice/piper1-gpl>, <https://huggingface.co/hexgrad/Kokoro-82M>, <https://pypi.org/project/kokoro-onnx/>.
+- STT com parciais nativas: Vosk `vosk-model-small-pt` (~45 MB) — trocar só `stt.py` (`Engine` plugável).
+
+### 10.3 Arquivos
+
+| Arquivo | Papel |
+|---|---|
+| `app.py` | tray + janela + hotkey + `JsApi` (enviar, ditado start/stop, status) + agente em thread |
+| `ui/index.html` | Spotlight: input, mic, Enviar/Parar, linha de status, log dos steps |
+| `stt.py` | `Dictation` (mic → parciais → silêncio → final) com `Engine` plugável; `FasterWhisperEngine` |
+| `config.py` | seções `ui` (`hotkey`, `width`, `auto_hide`) e `stt` (`model`, `compute_type`, `language`, `silence_ms`, `partial_every_ms`, `auto_send`) |
+| `main.py --ui` | sobe o app em vez da CLI |
+
+### 10.4 Testes (offline, sem mic/modelo)
+
+`Dictation` recebe `Engine` e `source` de áudio falsos: parciais emitidas no intervalo certo; silêncio dispara `on_final` uma vez; `stop()` sem enviar mantém o texto; `auto_send=False` nunca envia. `JsApi` testado sem webview (callbacks capturados). `index.html` existe e referencia a API (`pywebview.api.*`).
 
 ## Apêndice — como reproduzir os achados
 

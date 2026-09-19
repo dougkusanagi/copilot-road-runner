@@ -29,6 +29,24 @@ DEFAULTS: dict = {
     "screenshot_max_width": 1024,  # Vocaela-2-1024R2: treino em longest-edge 1024
     "verify_wait_ms": 500,
     "stop_hotkey": "ctrl+alt+esc",
+    # --- tray + janela Spotlight (main.py --ui; extra `ui`) ---
+    "ui": {
+        "hotkey": "ctrl+alt+space",  # mostra/esconde a janela
+        "width": 720,
+        "auto_hide": True,  # esconde a janela enquanto o agente age
+    },
+    # --- ditado ao vivo (faster-whisper int8 em CPU) ---
+    "stt": {
+        "engine": "faster-whisper",
+        "model": "base",  # tiny|base|small (base ~74MB int8)
+        "compute_type": "int8",
+        "language": "pt",
+        "partial_every_ms": 1000,  # retranscreve o buffer p/ mostrar parcial
+        "silence_ms": 1500,  # silêncio contínuo -> transcrição final
+        "silence_rms": 0.01,  # limiar de energia p/ "silêncio"
+        "max_utterance_s": 30,
+        "auto_send": True,  # final por silêncio envia sozinho
+    },
 }
 
 

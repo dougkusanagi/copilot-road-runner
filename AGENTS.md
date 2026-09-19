@@ -17,6 +17,14 @@
   `max_steps`. `open_app` = whitelist (`tools.APP_COMMANDS`), `open_url` só
   http(s), nada passa por shell.
 - Revisão completa + roadmap: `docs/revisao-codebase-2026-09-18.md`.
+- **UI opcional** (`main.py --ui`, extra `ui`: `uv sync --extra ui`): `app.py`
+  = tray (pystray, thread daemon) + janela Spotlight (pywebview/WebView2,
+  thread principal) + hotkey `ui.hotkey` (`ctrl+alt+space`) + agente em
+  thread (janela se esconde antes de agir). `stt.py` = ditado ao vivo
+  (faster-whisper `base` int8; parciais a cada 1 s, silêncio 1,5 s → final
+  → `auto_send`). Lógica do ditado é pura (`Dictation.feed`) e testada sem
+  mic/modelo. Erro do engine NUNCA vira instrução (`on_error`). Sandbox não
+  instala a UI. Plano/decisões: §10 do relatório.
 - Arquivos-chave: `main.py` (CLI), `loop.py` (observe→decide→act→verify),
   `planner.py`, `vocaela.py`, `uia.py`, `actions.py`, `tools.py`,
   `safety.py`, `config.py`, `obs.py`.

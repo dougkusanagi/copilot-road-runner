@@ -13,20 +13,25 @@ import threading
 _stop = threading.Event()
 _keyboard_ok = False
 _keyboard_error: str | None = None
+_registered: str | None = None  # hotkey já registrada (o app roda várias tarefas)
 DEFAULT_HOTKEY = "ctrl+alt+esc"
 HOTKEY = DEFAULT_HOTKEY
 
 
 def _watch() -> None:
-    global _keyboard_ok, _keyboard_error
+    global _keyboard_ok, _keyboard_error, _registered
     try:
         import keyboard  # type: ignore
 
         _keyboard_ok = True
-        try:
-            keyboard.add_hotkey(HOTKEY, _stop.set)
-        except Exception:
-            pass
+        if _registered != HOTKEY:
+            try:
+                if _registered:
+                    keyboard.remove_hotkey(_registered)
+                keyboard.add_hotkey(HOTKEY, _stop.set)
+                _registered = HOTKEY
+            except Exception:
+                pass
         while not _stop.is_set():
             try:
                 if keyboard.is_pressed(HOTKEY):
