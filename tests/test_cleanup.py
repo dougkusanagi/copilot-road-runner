@@ -69,6 +69,21 @@ class TestCleanup(unittest.TestCase):
             self.assertFalse(hasattr(obs, name), f"helper morto: {name}")
         self.assertTrue(hasattr(obs, "capture_for_vision"))
 
+    def test_sem_mojibake_nem_bom(self):
+        """UTF-8 duplo (A-tilde + byte alto, 'a-circunflexo euro') e BOM ja
+        entraram no prompt do planner (commit anterior a 18/09)."""
+        import re
+
+        # '\u00c3' seguido de byte alto = acento codificado 2x; 'N\u00c3O' passa.
+        pat = re.compile("\u00c3[\u0080-\u00bf]|\u00e2\u20ac")
+        files = list(ROOT.glob("*.py")) + list((ROOT / "tests").glob("*.py"))
+        files += [ROOT / "README.md", ROOT / "AGENTS.md"]  # docs/ pode citar exemplos
+        for p in files:
+            raw = p.read_bytes()
+            self.assertFalse(raw.startswith(b"\xef\xbb\xbf"), f"BOM em {p.name}")
+            m = pat.search(raw.decode("utf-8"))
+            self.assertIsNone(m, f"mojibake em {p.name}: {m and m.group(0)!r}")
+
     def test_gitignore_cobre_provas_de_overlay(self):
         ign = (ROOT / ".gitignore").read_text(encoding="utf-8")
         self.assertIn("overlay_proof*.png", ign.splitlines())

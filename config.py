@@ -1,8 +1,8 @@
-﻿"""Config do MVP de 2 modelos: MiniCPM5-1B (planner) + Vocaela-2-500M (visÃ£o).
+"""Config do MVP de 2 modelos: MiniCPM5-1B (planner) + Vocaela-2-500M (visão).
 
 Dois servidores locais (podem ser llama.cpp, LM Studio ou outro runtime):
   planner: http://127.0.0.1:8091/v1   (MiniCPM5-1B, texto, SEM screenshots)
-  vision:  http://127.0.0.1:8082/v1   (Vocaela-2-500M-1024R2, screenshot+instruÃ§Ã£o)
+  vision:  http://127.0.0.1:8082/v1   (Vocaela-2-500M-1024R2, screenshot+instrução)
 
 Migra config.json legado (base_url/vision_model) automaticamente.
 """
@@ -58,7 +58,7 @@ def load(path: str | Path = "config.json") -> dict:
     if p.exists():
         try:
             raw = json.loads(p.read_text(encoding="utf-8"))
-            # merge raso por seÃ§Ã£o p/ nÃ£o perder defaults aninhados
+            # merge raso por seção p/ não perder defaults aninhados
             for k, v in raw.items():
                 if isinstance(v, dict) and isinstance(cfg.get(k), dict):
                     cfg[k] = {**cfg[k], **v}
@@ -66,5 +66,5 @@ def load(path: str | Path = "config.json") -> dict:
                     cfg[k] = v
             cfg = _migrate_legacy(cfg)
         except Exception as e:
-            print(f"config.json invÃ¡lido ({e}); usando defaults.")
+            print(f"config.json inválido ({e}); usando defaults.")
     return cfg

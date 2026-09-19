@@ -1,17 +1,17 @@
-﻿"""Planner: MiniCPM5-1B (openbmb/MiniCPM5-1B). SÃ“ pensa â€” nunca vÃª screenshots.
+"""Planner: MiniCPM5-1B (openbmb/MiniCPM5-1B). SÓ pensa — nunca vê screenshots.
 
 Notas do model card oficial (verificadas antes de implementar):
-- Arquitetura LlamaForCausalLM padrÃ£o â†’ GGUF oficial (MiniCPM5-1B-GGUF:
+- Arquitetura LlamaForCausalLM padrão → GGUF oficial (MiniCPM5-1B-GGUF:
   Q4_K_M 657MB / Q8_0 1.1GB) roda em llama.cpp, Ollama, LM Studio.
 - Modos Think / No-Think no mesmo checkpoint; No-Think (temp 0.7, top_p 0.95)
-  Ã© o rÃ¡pido â€” aqui usamos temp ainda menor (0.1) p/ saÃ­da determinÃ­stica.
-- Tool calling nativo do modelo Ã© XML-style via parser SGLang (`minicpm5`).
-  Via llama-server OpenAI-compatible NÃƒO hÃ¡ esse parser, entÃ£o NÃƒO usamos o
-  parÃ¢metro `tools`: o planner responde um Ãºnico objeto JSON (schema abaixo)
+  é o rápido — aqui usamos temp ainda menor (0.1) p/ saída determinística.
+- Tool calling nativo do modelo é XML-style via parser SGLang (`minicpm5`).
+  Via llama-server OpenAI-compatible NÃO há esse parser, então NÃO usamos o
+  parâmetro `tools`: o planner responde um único objeto JSON (schema abaixo)
   e o Python valida + executa. Nada inventado no template de chat.
 
-O planner recebe SÃ“ texto compacto (goal, janela, elementos, Ãºltimas aÃ§Ãµes,
-Ãºltimo erro, tools). Ele NUNCA recebe screenshots e NUNCA emite coordenadas.
+O planner recebe SÓ texto compacto (goal, janela, elementos, últimas ações,
+último erro, tools). Ele NUNCA recebe screenshots e NUNCA emite coordenadas.
 """
 from __future__ import annotations
 
@@ -28,20 +28,20 @@ PlannerActionType = Literal[
     "hotkey", "uia_click", "visual_action", "wait", "done",
 ]
 
-# Tools que o planner pode escolher. uia_click = clicar por NOME acessÃ­vel
-# (Python resolve via UIA; se nÃ£o achar, escala p/ visual_action sozinho).
-# visual_action = "preciso enxergar" â†’ screenshot vai SÃ“ p/ o Vocaela.
+# Tools que o planner pode escolher. uia_click = clicar por NOME acessível
+# (Python resolve via UIA; se não achar, escala p/ visual_action sozinho).
+# visual_action = "preciso enxergar" → screenshot vai SÓ p/ o Vocaela.
 TOOLS_SPEC = """\
-- {"type":"open_app","app":"notepad|calc|msedge|chrome|brave"} â€” abrir aplicativo
-- {"type":"open_url","url":"https://..."} â€” abrir URL no Edge
-- {"type":"focus_window","target":"trecho do tÃ­tulo"} â€” focar janela
-- {"type":"type_text","text":"..."} â€” digitar na janela focada
-- {"type":"press_key","key":"enter|esc|tab|f5"} â€” uma tecla
-- {"type":"hotkey","keys":"ctrl+n|ctrl+l|..."} â€” combinaÃ§Ã£o
-- {"type":"uia_click","target":"nome do elemento"} â€” clicar elemento VISÃVEL na Ã¡rvore de acessibilidade (prefira sempre que o elemento tiver nome, ex: botÃ£o "7" da calculadora)
-- {"type":"visual_action","instruction":"Click the blue Continue button"} â€” SÃ“ quando o elemento NÃƒO estÃ¡ na lista de UI elements (canvas, custom UI, Ã­cone sem nome). Instruction em inglÃªs, curta, com verbo + alvo. NUNCA inclua coordenadas.
-- {"type":"wait","ms":2000} â€” aguardar UI carregar
-- {"type":"done"} â€” objetivo cumprido"""
+- {"type":"open_app","app":"notepad|calc|msedge|chrome|brave"} — abrir aplicativo
+- {"type":"open_url","url":"https://..."} — abrir URL no Edge
+- {"type":"focus_window","target":"trecho do título"} — focar janela
+- {"type":"type_text","text":"..."} — digitar na janela focada
+- {"type":"press_key","key":"enter|esc|tab|f5"} — uma tecla
+- {"type":"hotkey","keys":"ctrl+n|ctrl+l|..."} — combinação
+- {"type":"uia_click","target":"nome do elemento"} — clicar elemento VISÍVEL na árvore de acessibilidade (prefira sempre que o elemento tiver nome, ex: botão "7" da calculadora)
+- {"type":"visual_action","instruction":"Click the blue Continue button"} — SÓ quando o elemento NÃO está na lista de UI elements (canvas, custom UI, ícone sem nome). Instruction em inglês, curta, com verbo + alvo. NUNCA inclua coordenadas.
+- {"type":"wait","ms":2000} — aguardar UI carregar
+- {"type":"done"} — objetivo cumprido"""
 
 PLANNER_SYSTEM = """You are the planner of a local Windows computer-use agent. Think fast, output little.
 Reply with EXACTLY ONE JSON object, no markdown, no explanation, no thinking trace.
@@ -84,7 +84,7 @@ class PlannerDecision(BaseModel):
 
 def build_prompt(goal: str, window: str, ui_names: list[str],
                  history: list[str], last_error: str = "") -> str:
-    """Contexto compacto p/ o planner. Sem screenshots, sem Ã¡rvore completa."""
+    """Contexto compacto p/ o planner. Sem screenshots, sem árvore completa."""
     names = ", ".join(ui_names[:40]) or "(nenhum elemento exposto)"
     hist = "\n".join(f"{i + 1}. {h}" for i, h in enumerate(history[-5:])) or "(nenhuma)"
     err = f"\nLast error:\n{last_error}\n" if last_error else ""
@@ -94,7 +94,7 @@ def build_prompt(goal: str, window: str, ui_names: list[str],
 
 
 def extract_json(text: str) -> dict:
-    """Extrai UM objeto JSON mesmo com fences/noise ao redor. Erro se invÃ¡lido."""
+    """Extrai UM objeto JSON mesmo com fences/noise ao redor. Erro se inválido."""
     t = text.strip()
     t = re.sub(r"^```(?:json)?\s*|\s*```$", "", t).strip()
     try:
@@ -108,7 +108,7 @@ def extract_json(text: str) -> dict:
         d = json.loads(m.group(0))
         if isinstance(d, dict):
             return d
-    raise ValueError(f"planner nÃ£o retornou JSON vÃ¡lido: {text[:200]!r}")
+    raise ValueError(f"planner não retornou JSON válido: {text[:200]!r}")
 
 
 class MiniCPMPlanner:
@@ -134,7 +134,7 @@ class MiniCPMPlanner:
 
     def next_action(self, goal: str, window: str, ui_names: list[str],
                     history: list[str], last_error: str = "") -> tuple[PlannerDecision, float]:
-        """Uma decisÃ£o do planner. Retorna (decisÃ£o, planner_ms). SÃ³ texto."""
+        """Uma decisão do planner. Retorna (decisão, planner_ms). Só texto."""
         user = build_prompt(goal, window, ui_names, history, last_error)
         payload = {
             "model": self.model,

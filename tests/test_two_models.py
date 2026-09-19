@@ -1,8 +1,8 @@
-﻿"""Testes da arquitetura de 2 modelos (offline + mock HTTP, sem GUI).
+"""Testes da arquitetura de 2 modelos (offline + mock HTTP, sem GUI).
 
 - Planner: prompt compacto sem screenshot, JSON tolerante, veto a coordenadas.
-- Vocaela: parser do formato oficial <Action>[...]</Action>, normalizaÃ§Ã£o 0..1.
-- IntegraÃ§Ã£o: clientes OpenAI-compatible contra servidores mock locais.
+- Vocaela: parser do formato oficial <Action>[...]</Action>, normalização 0..1.
+- Integração: clientes OpenAI-compatible contra servidores mock locais.
 - UIA resolve por nome (sem scorer no fluxo principal).
 
 Roda com: .\\.venv\\Scripts\\python.exe -m unittest discover -s tests -v
@@ -105,7 +105,7 @@ class TestPlannerJson(unittest.TestCase):
 
     def test_invalido(self):
         with self.assertRaises(ValueError):
-            planner.extract_json("olÃ¡, clique ali")
+            planner.extract_json("olá, clique ali")
 
     def test_veta_coords(self):
         dec = planner.PlannerDecision.model_validate({"type": "visual_action",
@@ -115,8 +115,8 @@ class TestPlannerJson(unittest.TestCase):
 
     def test_decision_valida(self):
         dec = planner.PlannerDecision.model_validate({"type": "type_text",
-                                                      "text": "OlÃ¡"})
-        self.assertEqual(dec.text, "OlÃ¡")
+                                                      "text": "Olá"})
+        self.assertEqual(dec.text, "Olá")
 
     def test_tipo_desconhecido_rejeitado(self):
         with self.assertRaises(Exception):
@@ -190,7 +190,7 @@ class TestVocaelaParse(unittest.TestCase):
 
     def test_lixo_rejeita(self):
         with self.assertRaises(ValueError):
-            vocaela.parse_vocaela_output("nÃ£o achei nada na tela")
+            vocaela.parse_vocaela_output("não achei nada na tela")
 
     def test_acao_desconhecida_rejeita(self):
         with self.assertRaises(ValueError):
