@@ -25,11 +25,14 @@ import io
 import json
 import re
 import time
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import httpx
 from PIL import Image
 from pydantic import BaseModel, field_validator
+
+if TYPE_CHECKING:
+    from schemas import Action
 
 # --- system message oficial p/ computer use (verbatim do model card) ---------
 VOCAELA_COMPUTER_SYSTEM = """You are an assistant trained to navigate the computer screen.
@@ -60,14 +63,15 @@ output the next actions and wait for the next observation.
 If a parameter is not applicable, don't include it in the JSON object.
 """
 
-VisualActionType = Literal["click", "double_click", "right_click", "move", "drag",
-                           "scroll", "type", "key", "hotkey", "wait"]
+VisualActionType = Literal["click", "double_click", "right_click", "middle_click",
+                           "move", "drag", "scroll", "type", "key", "hotkey",
+                           "answer"]
 
 _VOC_TO_INTERNAL = {
     "CLICK": "click", "DOUBLE_CLICK": "double_click", "RIGHT_CLICK": "right_click",
-    "MIDDLE_CLICK": "click", "MOUSE_MOVE": "move", "DRAG": "drag",
+    "MIDDLE_CLICK": "middle_click", "MOUSE_MOVE": "move", "DRAG": "drag",
     "SCROLL": "scroll", "TYPE": "type", "PRESS_KEY": "key", "HOTKEY": "hotkey",
-    "ANSWER": "wait",  # resposta textual: nada a clicar; executor trata como no-op
+    "ANSWER": "answer",  # resposta textual: vira observação, não input
 }
 
 
@@ -80,7 +84,9 @@ class VisualAction(BaseModel):
     y2: float | None = None
     text: str | None = None
     key: str | None = None
+    presses: int = 1
     scroll_direction: str | None = None
+    dropped: int = 0  # ações extras do array que NÃO foram executadas
 
     @field_validator("x", "y", "x2", "y2")
     @classmethod
@@ -109,8 +115,9 @@ def _prep_image(img: Image.Image, max_long_edge: int = 1024,
 def parse_vocaela_output(text: str) -> VisualAction:
     """Parser do formato oficial <Action>[{...}]</Action> (+fallbacks tolerantes).
 
-    Usa a PRIMEIRA ação do array (passo low-level único). Aceita tipos em
-    qualquer caixa. Erro honesto se inválido — nunca inventa coordenada.
+    Usa a PRIMEIRA ação do array (passo low-level único); `dropped` conta
+    as demais p/ log. Aceita tipos em qualquer caixa. Erro honesto se
+    inválido — nunca inventa coordenada.
     """
     t = text.strip()
     m = re.search(r"<Action>(.*?)</Action>", t, re.DOTALL | re.IGNORECASE)
@@ -123,10 +130,17 @@ def parse_vocaela_output(text: str) -> VisualAction:
         if not m2:
             raise ValueError(f"Vocaela não retornou ação válida: {text[:200]!r}")
         d = json.loads(m2.group(0))
-    first = d[0] if isinstance(d, list) else d
+    if isinstance(d, list):
+        if not d:
+            raise ValueError(f"Vocaela devolveu array vazio: {text[:200]!r}")
+        first, dropped = d[0], len(d) - 1
+    else:
+        first, dropped = d, 0
     if not isinstance(first, dict):
         raise ValueError(f"ação Vocaela malformada: {text[:200]!r}")
-    return _normalize(first)
+    va = _normalize(first)
+    va.dropped = dropped
+    return va
 
 
 def _coord(v: object, what: str) -> tuple[float, float]:
@@ -150,20 +164,19 @@ def _normalize(d: dict) -> VisualAction:
         kw["x2"], kw["y2"] = _coord(d["coordinate2"], "coordinate2")
     if t == "drag" and ("x" not in kw or "x2" not in kw):
         raise ValueError(f"drag precisa de coordinate+coordinate2: {d}")
-    if t in ("click", "double_click", "right_click", "move") and "x" not in kw:
+    if t in ("click", "double_click", "right_click", "middle_click", "move") \
+            and "x" not in kw:
         raise ValueError(f"{t} precisa de coordinate: {d}")
-    if t == "type":
+    if t in ("type", "answer"):
         kw["text"] = str(d.get("text", ""))
         if not kw["text"]:
-            raise ValueError(f"type sem text: {d}")
+            raise ValueError(f"{t} sem text: {d}")
     if t == "key":
         kw["key"] = str(d.get("key", ""))
-        presses = d.get("presses", 1)
         if not kw["key"]:
             raise ValueError(f"press_key sem key: {d}")
-        if isinstance(presses, int) and presses > 1:
-            kw["key"] = "+".join([kw["key"]] * 1)  # presses>1: executor repete
-            kw["text"] = str(presses)
+        presses = d.get("presses", 1)
+        kw["presses"] = presses if isinstance(presses, int) and presses > 0 else 1
     if t == "hotkey":
         hk = d.get("hotkeys", [])
         if not isinstance(hk, list) or not hk:
@@ -179,7 +192,7 @@ def _normalize(d: dict) -> VisualAction:
 
 
 def visual_to_action(va: VisualAction, size: tuple[int, int],
-                     origin: tuple[int, int] = (0, 0)) -> "Action":
+                     origin: tuple[int, int] = (0, 0)) -> Action:
     """Converte 0..1 (relativo ao crop) → pixels físicos. Import tardio p/ testes."""
     from schemas import Action
 
@@ -190,20 +203,22 @@ def visual_to_action(va: VisualAction, size: tuple[int, int],
         return None if f is None else off + int(round(f * total))
 
     t = va.type
-    if t in ("click", "double_click", "right_click", "move"):
-        atype = {"click": "click", "double_click": "double_click",
-                 "right_click": "right_click", "move": "move"}[t]
-        return Action(type=atype, x=px(va.x, w, ox), y=px(va.y, h, oy))
+    if t in ("click", "double_click", "right_click", "middle_click", "move"):
+        return Action(type=t, x=px(va.x, w, ox), y=px(va.y, h, oy))
     if t == "drag":
         return Action(type="drag", x=px(va.x, w, ox), y=px(va.y, h, oy),
                       x2=px(va.x2, w, ox), y2=px(va.y2, h, oy))
     if t == "scroll":
-        return Action(type="scroll", text=va.text or "-800")
+        # key carrega a direção: left/right -> hscroll no executor
+        return Action(type="scroll", text=va.text or "-800",
+                      key=va.scroll_direction or "down")
     if t == "type":
         return Action(type="type", text=va.text)
     if t in ("key", "hotkey"):
-        return Action(type="hotkey", key=va.key)
-    return Action(type="wait", ms=300)
+        return Action(type="hotkey", key=va.key, presses=va.presses)
+    if t == "answer":
+        return Action(type="answer", text=va.text)
+    raise ValueError(f"ação visual sem mapeamento: {t}")
 
 
 class VocaelaAdapter:
@@ -228,7 +243,7 @@ class VocaelaAdapter:
             return {"ok": False, "error": str(e)}
 
     async def act(self, screenshot: Image.Image | str,
-                  instruction: str) -> VisualAction:
+                  instruction: str) -> tuple[VisualAction, float]:
         return await asyncio.to_thread(self.act_sync, screenshot, instruction)
 
     def act_sync(self, screenshot: Image.Image | str,

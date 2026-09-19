@@ -43,18 +43,14 @@ for _s in (sys.stdout, sys.stderr):
 
 def locate_only(target: str, cfg: dict) -> None:
     """Dry-run do grounding Vocaela: screenshot → act → imprime, sem clicar."""
+    from loop import _build_models
     from obs import capture_for_vision
-    from vocaela import VocaelaAdapter, visual_to_action
+    from vocaela import visual_to_action
 
-    vc = cfg.get("vision", {})
     img, origin, full = capture_for_vision(
         max_long_edge=int(cfg.get("screenshot_max_width", 1024)))
-    va, vms = VocaelaAdapter(
-        base_url=vc.get("base_url", "http://127.0.0.1:8082/v1"),
-        model=vc.get("model", "Vocaela-2-500M-1024R2"),
-        timeout_s=float(vc.get("timeout_s", 180)),
-        max_long_edge=int(cfg.get("screenshot_max_width", 1024)),
-    ).act_sync(img, target)
+    _, vocaela = _build_models(cfg)
+    va, vms = vocaela.act_sync(img, target)
     act = visual_to_action(va, (img.size[0], img.size[1]), origin)
     print(json.dumps({"target": target, "visual": va.model_dump(),
                       "origin": list(origin), "crop": list(img.size),
@@ -69,12 +65,12 @@ def main() -> None:
     ap.add_argument("instruction", nargs="?", default="", help="instrução do usuário")
     ap.add_argument("--config", default="config.json")
     ap.add_argument("--max-steps", type=int, default=None)
-    ap.add_argument("--self-test", action="store_true", help="só testa screenshot + métricas, sem clicar")
+    ap.add_argument("--self-test", action="store_true",
+                    help="só testa screenshot + métricas, sem clicar")
     ap.add_argument("--planner-url", default=None, help="override de planner.base_url")
     ap.add_argument("--vision-url", default=None, help="override de vision.base_url")
-    ap.add_argument("--lmstudio-url", default=None,
-                    help="override legado: aplica a planner+vision (deprecated)")
-    ap.add_argument("--locate", default="", help='dry-run Vocaela: --locate "Click the address bar"')
+    ap.add_argument("--locate", default="",
+                    help='dry-run Vocaela: --locate "Click the address bar"')
     args = ap.parse_args()
 
     cfg = cfgmod.load(args.config)
@@ -84,15 +80,12 @@ def main() -> None:
         cfg["planner"]["base_url"] = args.planner_url
     if args.vision_url:
         cfg["vision"]["base_url"] = args.vision_url
-    if args.lmstudio_url:
-        cfg["planner"]["base_url"] = args.lmstudio_url
-        cfg["vision"]["base_url"] = args.lmstudio_url
 
     if args.self_test:
-        from obs import take_screenshot
         import safety
+        from obs import take_screenshot
 
-        safety.start()
+        safety.start(cfg.get("stop_hotkey"))
         t0 = time.perf_counter()
         path, (w, h) = take_screenshot()
         dt = (time.perf_counter() - t0) * 1000
@@ -105,7 +98,7 @@ def main() -> None:
             "mem_pct": psutil.virtual_memory().percent,
             "safety": safety.status(),
             "config": cfg,
-            "note": "Ctrl+Alt+Esc (ou ESC) aborta; dry-run sem cliques",
+            "note": f"{safety.HOTKEY} aborta; dry-run sem cliques",
         }, indent=2))
         return
 

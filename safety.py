@@ -2,6 +2,9 @@
 
 Usa `keyboard` se disponível; se falhar (ex: sem permissão),
 o failsafe do pyautogui (mouse no canto superior-esquerdo) continua valendo.
+
+ESC puro NÃO aborta: o planner pode emitir `press_key: esc` (fechar diálogo)
+e o usuário pode usar ESC no Sandbox; só a combinação dedicada para o loop.
 """
 from __future__ import annotations
 
@@ -10,7 +13,8 @@ import threading
 _stop = threading.Event()
 _keyboard_ok = False
 _keyboard_error: str | None = None
-HOTKEY = "ctrl+alt+esc"
+DEFAULT_HOTKEY = "ctrl+alt+esc"
+HOTKEY = DEFAULT_HOTKEY
 
 
 def _watch() -> None:
@@ -25,7 +29,7 @@ def _watch() -> None:
             pass
         while not _stop.is_set():
             try:
-                if keyboard.is_pressed(HOTKEY) or keyboard.is_pressed("esc"):
+                if keyboard.is_pressed(HOTKEY):
                     _stop.set()
                     break
             except Exception:
@@ -39,8 +43,14 @@ def _watch() -> None:
 _thread: threading.Thread | None = None
 
 
-def start() -> None:
-    global _thread
+def normalize_hotkey(hotkey: str | None) -> str:
+    return ((hotkey or "").strip().lower()) or DEFAULT_HOTKEY
+
+
+def start(hotkey: str | None = None) -> None:
+    """Sobe o watcher. `hotkey` vem de cfg["stop_hotkey"] (default ctrl+alt+esc)."""
+    global _thread, HOTKEY
+    HOTKEY = normalize_hotkey(hotkey)
     _stop.clear()
     _thread = threading.Thread(target=_watch, daemon=True)
     _thread.start()

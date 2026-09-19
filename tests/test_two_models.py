@@ -27,11 +27,6 @@ import vocaela  # noqa: E402
 
 
 # --- helpers mock ------------------------------------------------------------
-class _MockState:
-    seen: list[dict] = []
-    reply_text: str = ""
-
-
 def _make_server(reply_text: str):
     seen: list[dict] = []
 
@@ -142,6 +137,7 @@ class TestPlannerClient(unittest.TestCase):
             self.assertLessEqual(payload["temperature"], 0.2)
         finally:
             srv.shutdown()
+            srv.server_close()
 
 
 # --- vocaela -----------------------------------------------------------------
@@ -228,6 +224,7 @@ class TestVocaelaAdapter(unittest.TestCase):
             self.assertIn("Click the address bar", user_blob)
         finally:
             srv.shutdown()
+            srv.server_close()
 
     def test_visual_to_action_com_origin(self):
         va = vocaela.VisualAction(type="click", x=0.5, y=0.5)

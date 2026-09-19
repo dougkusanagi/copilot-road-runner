@@ -1,41 +1,64 @@
 """Ferramentas determinísticas. Registry simples de funções, sem framework."""
 from __future__ import annotations
 
-import subprocess
 import time
 
-from schemas import Action, UIElement
+from schemas import Action
 
-
+# Whitelist: o alvo vem do PLANNER (que lê texto de tela) e por isso nunca
+# passa por shell. Fora daqui = erro honesto (vira last_error p/ o modelo).
 APP_COMMANDS = {
-    "msedge": 'cmd /c start "" msedge',
-    "edge": 'cmd /c start "" msedge',
-    "microsoft edge": 'cmd /c start "" msedge',
-    "chrome": 'cmd /c start "" chrome',
-    "brave": 'cmd /c start "" brave',
-    "notepad": "notepad",
-    "calc": "calc",
-    "calculator": "calc",
+    "msedge": "msedge", "edge": "msedge", "microsoft edge": "msedge",
+    "chrome": "chrome", "brave": "brave",
+    "notepad": "notepad", "notepad.exe": "notepad", "bloco de notas": "notepad",
+    "calc": "calc", "calc.exe": "calc", "calculator": "calc", "calculadora": "calc",
 }
+_URL_PREFIX = "url:"
 
 
 def open_app(target: str) -> str:
-    """Abre app. Resolve via `start` (App Paths) p/ navegadores; stdout some no log."""
+    """Abre app da whitelist via ShellExecute (App Paths resolve msedge etc.).
+
+    `url:https://...` (gerado por open_url) abre no navegador padrão.
+    Nunca usa shell=True: sem injeção via `&`, `"` ou `%`.
+    """
     import os
 
+    if target.startswith(_URL_PREFIX):
+        url = target[len(_URL_PREFIX):]
+        os.startfile(url)
+        time.sleep(1.2)
+        return f"opened {url}"
     key = target.strip().lower()
-    cmd = APP_COMMANDS.get(key, target)
-    if key not in APP_COMMANDS and not key.endswith(".exe"):
-        cmd = f'cmd /c start "" {target}'
-    with open(os.devnull, "w") as dn:
-        subprocess.Popen(cmd, shell=True, stdout=dn, stderr=dn)
+    exe = APP_COMMANDS.get(key)
+    if exe is None:
+        raise ValueError(f"app fora da whitelist: {target!r}; "
+                         f"use um de {sorted(set(APP_COMMANDS.values()))}")
+    _launch(exe)
     time.sleep(1.2)
-    return f"opened {target}"
+    return f"opened {exe}"
+
+
+def _launch(exe: str) -> None:
+    """ShellExecute (resolve App Paths: msedge/chrome) com fallback Popen em lista."""
+    import os
+    import subprocess
+
+    try:
+        os.startfile(exe)
+    except OSError:
+        subprocess.Popen([exe], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def open_url(url: str) -> Action:
-    """Abre URL no navegador padrão (via open)."""
-    return Action(type="open", target=f'cmd /c start "" "{url}"')
+    """Abre URL http(s) no navegador padrão. Recusa outros esquemas."""
+    from urllib.parse import urlparse
+
+    u = (url or "").strip()
+    p = urlparse(u)
+    if p.scheme not in ("http", "https") or not p.netloc or any(c in u for c in ' "\n'):
+        raise ValueError(f"URL inválida p/ open_url: {url!r} (só http/https)")
+    return Action(type="open", target=f"{_URL_PREFIX}{u}")
 
 
 def focus_window(title_substr: str, timeout: float = 8.0) -> bool:
@@ -87,50 +110,3 @@ def focus_window(title_substr: str, timeout: float = 8.0) -> bool:
     return False
 
 
-def list_windows() -> list[str]:
-    """Lista títulos das janelas visíveis (wrap de uia, evita import circular)."""
-    from uia import find_window_titles
-
-    return find_window_titles()
-
-
-def click_element(el: UIElement) -> Action:
-    x, y = el.center
-    if x <= 0 and y <= 0:
-        raise ValueError(f"elemento sem rect válido: {el.name!r}")
-    return Action(type="click", x=x, y=y)
-
-
-def type_text(text: str) -> Action:
-    return Action(type="type", text=text)
-
-
-def press(key: str) -> Action:
-    """Uma tecla: 'enter', 'esc', 'tab', 'f5'. (alias de press_key)"""
-    return Action(type="hotkey", key=key)
-
-
-def press_key(key: str) -> Action:
-    return Action(type="hotkey", key=key)
-
-
-def hotkey(keys: str) -> Action:
-    """Combo: 'ctrl+l', 'ctrl+alt+esc', 'alt+f4'."""
-    return Action(type="hotkey", key=keys)
-
-
-def wait(ms: int) -> Action:
-    return Action(type="wait", ms=int(ms))
-
-
-# Registry mínimo p/ planner futuro / depuração. Não é framework: só um dict.
-TOOLS = {
-    "open_app": open_app,
-    "open_url": open_url,
-    "focus_window": focus_window,
-    "list_windows": list_windows,
-    "type_text": type_text,
-    "press_key": press_key,
-    "hotkey": hotkey,
-    "wait": wait,
-}

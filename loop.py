@@ -1,23 +1,28 @@
-"""Loop observe -> decide -> act -> verify -> repeat (2 modelos, decisão 100% IA).
+"""Loop observe -> decide -> act -> verify -> repeat (2 modelos).
 
 Arquitetura:
   MiniCPM5-1B = pensar (só texto compacto; nunca recebe screenshots,
                 nunca emite coordenadas)
   Vocaela-2-500M = enxergar (screenshot + instrução curta -> ação visual 0..1)
-  Python = executar (tools, UIA, mouse/teclado) — NUNCA decide.
+  Python = executar, OBSERVAR e VETAR — nunca escolher a ação.
 
 Ordem de decisão (barata primeiro), todas vindas do planner:
   1. native tool      (open/focus/type decididos pelo planner)
   2. UI Automation    (uia_click por NOME; Vocaela nunca é chamado à toa)
   3. Vocaela          (SÓ quando o elemento não está na accessibility tree)
 
-Sem router determinístico, sem scorer, sem conclusão programática de "done":
-se os modelos não estiverem online, o agente para com erro honesto.
+Guard-rails determinísticos (Python veta/observa, não escolhe):
+  - bootstrap da janela do app pedido (open_app é ferramenta; um 1B não
+    abre processo) — roda ANTES de gastar uma chamada ao planner;
+  - guarda anti-janela-errada e anti-repetição: devolvem `last_error` ao
+    planner em vez de executar;
+  - veto de coordenada fora da tela/janela (actions/_resolve_uia).
+
+Sem modelos online = erro honesto, sem fallback programático.
 """
 from __future__ import annotations
 
 import json
-import re
 import time
 from pathlib import Path
 
@@ -28,12 +33,13 @@ from actions import execute
 from obs import capture_for_vision
 from planner import MiniCPMPlanner, PlannerDecision
 from schemas import Action, Decision
-from uia import active_window_snapshot, foreground_title  # foreground_title: guard calc
+from uia import active_window_snapshot
 from vocaela import VocaelaAdapter, visual_to_action
 
 LOG = Path("run.jsonl")
 
-CALC_WORDS = ["calculadora", "calculator"]
+CALC_WORDS = ("calculadora", "calculator")
+MAX_RETRIES = 3  # erros de decisão/tool consecutivos antes de "stuck"
 
 _JUNK_TYPES = {"window", "titlebar", "menubar"}
 _CHROME_PREFIXES = ("minimizar ", "maximizar ", "restaurar ", "fechar ",
@@ -52,44 +58,22 @@ def _log(obj: dict) -> None:
         f.write(json.dumps(obj, ensure_ascii=False) + "\n")
 
 
-def _has_any(ins: str, words: list[str]) -> bool:
+def _has_any(ins: str, words: tuple[str, ...]) -> bool:
     ins = ins.lower()
     return any(w in ins for w in words)
 
 
-def _extract_text_to_type(instruction: str) -> str:
-    m = re.search(r"(?:escreva|escrever|write|digite|digitar|type)\s*[:\-—]?\s*[\"']?(.+?)[\"']?$",
-                  instruction, re.IGNORECASE)
-    return m.group(1).strip() if m else ""
-
-
-def _extract_digit(instruction: str) -> str:
-    m = re.search(r"\d", instruction)
-    return m.group(0) if m else ""
-
-
-def _extract_search_query(instruction: str) -> str:
-    m = re.search(r"(?:busque|buscar|pesquise|pesquisar|search|procure)\s*[:\-—]?\s*[\"']?(.+?)[\"']?$",
-                  instruction, re.IGNORECASE)
-    return m.group(1).strip() if m else ""
-
-
-# (dígito → nomes PT+EN em _DIGIT_WORDS acima; _resolve_uia expande sozinho)
-
-
-# --- bootstrap do app pedido (ferramenta determinística, sem IA) ---------------
+# --- guard: bootstrap do app pedido (ferramenta determinística, sem IA) --------
 def _app_bootstrap(instruction: str, step: int, active_lower: str) -> Action | None:
     """Garante a JANELA certa aberta antes das decisões por modelo.
 
     open_app é ferramenta (o MiniCPM não abre processo), por isso estes steps
-    fixos existem e rodam ANTES do planner decidir qualquer coisa: o planner
-    já recebe a janela certa no estado, e a partir daí tudo é IA
-    (uia_click → Vocaela → type/hotkey...). Sem branch por tipo de app aqui:
-    só abrir app + confirmar foco.
+    fixos existem e rodam ANTES do planner: ele já recebe a janela certa no
+    estado, e a partir daí tudo é IA. Só abrir app + confirmar foco.
     """
     low = instruction.lower()
     want = "notepad.exe" if any(w in low for w in ("notepad", "bloco de notas")) \
-        else "calc.exe" if any(w in low for w in ("calculadora", "calculator")) \
+        else "calc.exe" if _has_any(low, CALC_WORDS) \
         else None
     if want is None:
         return None  # browser e resto: planner resolve (open_url/focus/visual)
@@ -105,7 +89,7 @@ def _app_bootstrap(instruction: str, step: int, active_lower: str) -> Action | N
     return Action(type="wait", ms=300)
 
 
-# --- verify -------------------------------------------------------------------
+# --- UIA por nome ------------------------------------------------------------
 def _resolve_uia(items: list[dict], target: str, wrect: tuple | None,
                  state_title: str = "") -> Action | None:
     """Encontra elemento pelo NOME na janela ativa -> click no centro.
@@ -155,7 +139,7 @@ def _resolve_uia(items: list[dict], target: str, wrect: tuple | None,
 
 def _planner_to_action(dec: PlannerDecision) -> Action | None:
     """Mapeia decisão nativa do planner -> Action. uia_click/visual voltam None
-    (resolvidos à parte)."""
+    (resolvidos à parte). ValueError das tools (whitelist/URL) sobe ao chamador."""
     t = dec.type
     if t == "open_app":
         return Action(type="open", target=dec.app or "")
@@ -200,38 +184,41 @@ def _decide_planner(instruction: str, step: int, ctx: dict, cfg: dict,
     t["uia_count"] = len(items)
     names = [(it.get("name") or "") for it in items][:40]
 
+    # guard 1: bootstrap ANTES do planner (senão a decisão do 1B é descartada
+    # e a latência, paga à toa).
+    boot = _app_bootstrap(instruction, step, (title or "").lower())
+    if boot is not None:
+        return Decision(action=boot, source="planner", confidence=1.0,
+                        reason="bootstrap janela do app"), t
+
     last_error = ctx.get("last_error", "")
     try:
         dec, pms = planner.next_action(
             goal=instruction, window=title, ui_names=names,
             history=ctx.get("hist_labels", []), last_error=last_error)
     except Exception as e:
-        ctx["planner_errors"] = ctx.get("planner_errors", 0) + 1
         raise RuntimeError(f"planner falhou: {e}")
     t["planner_ms"] = round(pms, 1)
     t["planner_calls"] = 1
     t["planner_decision"] = dec.model_dump()
-    ctx["planner_errors"] = 0
     ctx["last_error"] = ""
 
-    # bootstrap determinístico do app pedido (steps fixos, SEM IA): open_app
-    # é ferramenta — um planner 1B local não abre processo no Windows, só
-    # produz JSON. Passado o bootstrap da janela certa, 100% por modelos.
-    boot = _app_bootstrap(instruction, step, (title or "").lower())
-    if boot is not None:
-        return Decision(action=boot, source="planner", confidence=1.0,
-                        reason=f"bootstrap {_short(dec)}"), t
-
-    # guarda anti-janela-errada: sem foco no alvo, planner deve focar/abrir —
-    # se ele insistir em agir, devolve como last_error em vez de executar.
+    # guard 2: anti-janela-errada — sem foco no alvo, planner deve focar/abrir;
+    # se insistir em agir, devolve como last_error em vez de executar.
     if _has_any(instruction, CALC_WORDS) and "calcul" not in title.lower() \
             and dec.type in ("type_text", "uia_click", "visual_action",
                              "press_key", "hotkey"):
-        ctx["last_error"] = (f"janela ativa é {title!r}, não a calculadora; "
-                             "use focus_window ou open_app primeiro.")
-        raise RuntimeError(ctx["last_error"])
+        raise RuntimeError(f"janela ativa é {title!r}, não a calculadora; "
+                           "use focus_window ou open_app primeiro.")
 
-    native = _planner_to_action(dec)
+    if ctx.get("no_vision") and dec.type == "visual_action":
+        raise RuntimeError("visão desabilitada (no_vision); use uia_click, "
+                           "type_text ou teclado.")
+
+    try:
+        native = _planner_to_action(dec)
+    except ValueError as e:  # whitelist de app / URL inválida
+        raise RuntimeError(str(e))
     if native is not None:
         return Decision(action=native, source="planner", confidence=0.9,
                         reason=f"planner {_short(dec)}"), t
@@ -241,6 +228,9 @@ def _decide_planner(instruction: str, step: int, ctx: dict, cfg: dict,
         if hit is not None:
             return Decision(action=hit, source="uia", confidence=0.9,
                             reason=f'uia_click("{dec.target}")'), t
+        if ctx.get("no_vision"):
+            raise RuntimeError(f"uia_click: {dec.target!r} não está na "
+                               "accessibility tree e a visão está desabilitada.")
         # miss acessível -> escala p/ visão com a mesma intenção
         dec = PlannerDecision(type="visual_action",
                               instruction=f"Click {dec.target}")
@@ -264,6 +254,8 @@ def _decide_planner(instruction: str, step: int, ctx: dict, cfg: dict,
     t["vision_ms"] = round(vms, 1)
     t["vision_calls"] = 1
     t["visual"] = va.model_dump()
+    if va.dropped:
+        t["visual_dropped"] = va.dropped
     act = visual_to_action(va, (img.size[0], img.size[1]), origin)
     return Decision(action=act, source="vocaela", confidence=0.8,
                     reason=f'visual "{dec.instruction}" -> '
@@ -287,11 +279,10 @@ def verify(action: Action, instruction: str, cfg: dict) -> tuple[bool, str]:
     time.sleep(max(0, int(cfg.get("verify_wait_ms", 500))) / 1000.0)
     if safety.stop_requested():
         return False, "aborted"
-    items, title, _ = active_window_snapshot()
+    _items, title, _ = active_window_snapshot()
     return bool(title), f"active={title!r}"
 
 
-# --- verify -------------------------------------------------------------------
 def _key(a: Action) -> str:
     return f"{a.type}:{a.x},{a.y}:{a.text}:{a.key}:{a.target}"
 
@@ -309,12 +300,50 @@ def _vram() -> str:
         return "n/a (sem nvidia-smi)"
 
 
+def _build_models(cfg: dict) -> tuple[MiniCPMPlanner, VocaelaAdapter]:
+    pc = cfg.get("planner", {})
+    vc = cfg.get("vision", {})
+    planner = MiniCPMPlanner(base_url=pc.get("base_url", "http://127.0.0.1:8091/v1"),
+                             model=pc.get("model", "MiniCPM5-1B"),
+                             temperature=float(pc.get("temperature", 0.1)),
+                             timeout_s=float(pc.get("timeout_s", 90)))
+    vocaela = VocaelaAdapter(
+        base_url=vc.get("base_url", "http://127.0.0.1:8082/v1"),
+        model=vc.get("model", "Vocaela-2-500M-1024R2"),
+        timeout_s=float(vc.get("timeout_s", 180)),
+        max_long_edge=int(cfg.get("screenshot_max_width", 1024)))
+    return planner, vocaela
+
+
 # --- run ----------------------------------------------------------------------
 def run(instruction: str, cfg: dict) -> dict:
     max_steps = int(cfg.get("max_steps", 30))
     print(f"Task: {instruction}")
-    print("Stop: Ctrl+Alt+Esc (ou ESC) | Ctrl+C no terminal.")
-    safety.start()
+    print(f"Stop: {safety.HOTKEY} | Ctrl+C no terminal.")
+    if LOG.exists():
+        LOG.unlink()
+
+    # --- sobe os dois modelos: OBRIGATÓRIOS (decisão 100% por modelos) ---
+    planner, vocaela = _build_models(cfg)
+    st = planner.check()
+    if not st.get("ok"):
+        print(f"Planner MiniCPM5-1B OFFLINE: {st.get('error')}")
+        print("Suba o planner (llama-server em 8091) e rode de novo. "
+              "Sem fallback programático: os modelos decidem.")
+        _log({"event": "no_model", "planner": str(st.get("error"))[:200]})
+        return {"test": instruction, "result": "no_model", "steps": 0,
+                "retries": 0, "planner_calls": 0, "vocaela_calls": 0}
+    no_vision = bool(cfg.get("no_vision", False))
+    vs = vocaela.check()
+    if not vs.get("ok") and not no_vision:
+        print(f"Vocaela OFFLINE ({vs.get('error')}); visual_action vai falhar — "
+              "suba o llama-server do Vocaela em 8082.")
+    print(f"Planner: MiniCPM ({planner.base_url} modelos={st.get('models')})")
+    print(f"Visão: Vocaela ({vocaela.base_url} "
+          f"{'ok' if vs.get('ok') else 'OFFLINE: ' + str(vs.get('error'))[:80]})")
+
+    # safety + overlay só DEPOIS dos checks: nada de borda "controlado" órfã.
+    safety.start(cfg.get("stop_hotkey"))
     try:
         import overlay as _ov
 
@@ -322,58 +351,40 @@ def run(instruction: str, cfg: dict) -> dict:
     except Exception:
         ov_on = False
     print(f"Overlay de controle: {'ON (borda azul)' if ov_on else 'OFF (tkinter indisponível)'}")
-    if LOG.exists():
-        LOG.unlink()
 
-    # --- sobe os dois modelos: OBRIGATÓRIOS (decisão 100% por modelos) ---
-    pc = cfg.get("planner", {})
-    planner = MiniCPMPlanner(base_url=pc.get("base_url", "http://127.0.0.1:8091/v1"),
-                             model=pc.get("model", "MiniCPM5-1B"),
-                             temperature=float(pc.get("temperature", 0.1)),
-                             timeout_s=float(pc.get("timeout_s", 90)))
-    st = planner.check()
-    if not st.get("ok"):
-        print(f"Planner MiniCPM5-1B OFFLINE: {st.get('error')}")
-        print("Suba o planner (llama-server em 8091) e rode de novo. "
-              "Sem fallback programático: os modelos decidem.")
-        _log({"event": "no_model", "planner": str(st.get("error"))[:200]})
-        safety.stop()
-        return {"test": instruction, "result": "no_model", "mode": "planner-only",
-                "steps": 0, "planner_calls": 0, "vocaela_calls": 0}
-    vc = cfg.get("vision", {})
-    vocaela = VocaelaAdapter(
-        base_url=vc.get("base_url", "http://127.0.0.1:8082/v1"),
-        model=vc.get("model", "Vocaela-2-500M-1024R2"),
-        timeout_s=float(vc.get("timeout_s", 180)),
-        max_long_edge=int(cfg.get("screenshot_max_width", 1024)))
-    vs = vocaela.check()
-    if not vs.get("ok") and not cfg.get("no_vision"):
-        print(f"Vocaela OFFLINE ({vs.get('error')}); visual_action vai falhar — "
-              "suba o llama-server do Vocaela em 8082.")
-    mode = "planner"
-    print(f"Planner: MiniCPM ({planner.base_url} modelos={st.get('models')})")
-    vs2 = vocaela.check()
-    print(f"Visão: Vocaela ({vocaela.base_url} "
-          f"{'ok' if vs2.get('ok') else 'OFFLINE: ' + str(vs2.get('error'))[:80]})")
-
-    ctx: dict = {"no_vision": bool(cfg.get("no_vision", cfg.get("no_vlm", False))),
-                 "hist_labels": []}
+    ctx: dict = {"no_vision": no_vision, "hist_labels": [], "last_error": ""}
     metrics = {"planner_ms": 0.0, "uia_ms": 0.0, "screenshot_ms": 0.0,
                "vision_ms": 0.0, "execution_ms": 0.0, "step_ms": 0.0,
-               "vision_calls": 0, "planner_calls": 0, "steps": 0}
+               "vision_calls": 0, "planner_calls": 0, "steps": 0, "retries": 0}
     history: list[str] = []
-    forced_vision = False
-    n = 0
+    line = 0
+    retries = 0  # consecutivos; NÃO consomem max_steps
+    step = 0
     total0 = time.perf_counter()
     result = "stopped"
 
     def emit(layer: str, msg: str, ms) -> None:
-        nonlocal n
-        n += 1
-        print(f"[{n}] {layer:<7} {msg} {ms}" if ms != "" else f"[{n}] {layer:<7} {msg}")
+        nonlocal line
+        line += 1
+        print(f"[{line}] {layer:<7} {msg} {ms}" if ms != "" else f"[{line}] {layer:<7} {msg}")
+
+    def fail_step(kind: str, err: str) -> bool:
+        """Registra erro recuperável; True = continuar (retry), False = parar."""
+        nonlocal retries
+        retries += 1
+        metrics["retries"] += 1
+        ctx["last_error"] = err[:300]
+        if retries > MAX_RETRIES:
+            print(f"PARADO step {step}: {kind} falhou {retries}x: {err}")
+            _log({"step": step, "event": "stuck", "kind": kind, "error": err[:300]})
+            return False
+        print(f"[retry {retries}/{MAX_RETRIES}] step {step}: {err}")
+        _log({"step": step, "event": "retry", "kind": kind, "error": err[:300]})
+        time.sleep(0.5)
+        return True
 
     try:
-        for step in range(max_steps):
+        while step < max_steps:
             if safety.stop_requested():
                 _log({"step": step, "event": "aborted"})
                 result = "aborted"
@@ -383,22 +394,12 @@ def run(instruction: str, cfg: dict) -> dict:
             try:
                 dec, tm = decide(instruction, step, ctx, cfg, planner, vocaela)
             except RuntimeError as e:
-                # erro do planner/vocaela: alimenta last_error, retenta até 3x
-                n = ctx.get("decide_errors", 0) + 1
-                ctx["decide_errors"] = n
-                ctx["last_error"] = str(e)[:300]
-                if n > 3:
-                    print(f"PARADO step {step}: decisao falhou 4x: {e}")
-                    _log({"step": step, "event": "stuck", "error": str(e)[:300]})
-                    result = "stuck"
-                    break
-                print(f"[retry {n}/3] step {step}: {e}")
-                _log({"step": step, "event": "retry", "error": str(e)[:300]})
-                time.sleep(0.5)
-                continue
-            ctx["decide_errors"] = 0
+                if fail_step("decisao", str(e)):
+                    continue
+                result = "stuck"
+                break
 
-            metrics["planner_ms"] += tm.get("planner_ms", 0) + tm.get("tool_ms", 0)
+            metrics["planner_ms"] += tm.get("planner_ms", 0)
             metrics["uia_ms"] += tm.get("uia_ms", 0)
             metrics["screenshot_ms"] += tm.get("screenshot_ms", 0)
             metrics["vision_ms"] += tm.get("vision_ms", 0)
@@ -419,29 +420,33 @@ def run(instruction: str, cfg: dict) -> dict:
                          f'{tm.get("uia_ms", 0):.0f}ms')
                 if src == "vocaela":
                     va = tm.get("visual", {})
-                    emit("PLANNER", f'visual: {tm.get("planner_decision", {}).get("instruction", "")}',
+                    vinstr = tm.get("planner_decision", {}).get("instruction", "")
+                    emit("PLANNER", f"visual: {vinstr}",
                          f'{tm.get("planner_ms", 0):.0f}ms')
                     if tm.get("screenshot_ms"):
                         emit("SHOT", "active-window capture",
                              f'{tm.get("screenshot_ms", 0):.0f}ms')
-                    emit("VISION", f'{va.get("type")}({va.get("x")}, {va.get("y")})',
+                    dropped = tm.get("visual_dropped")
+                    extra = f" (+{dropped} descartadas)" if dropped else ""
+                    emit("VISION", f'{va.get("type")}({va.get("x")}, {va.get("y")}){extra}',
                          f'{tm.get("vision_ms", 0):.0f}ms')
-                elif src == "uia":
+                else:  # uia
                     emit("PLANNER", f'uia: {dec.reason}',
                          f'{tm.get("planner_ms", 0):.0f}ms')
-                else:  # pragma: no cover — decide() só retorna planner/uia/vocaela
-                    emit("PLANNER", dec.reason or src,
-                         f'{tm.get("planner_ms", 0):.0f}ms')
 
-            # anti-loop: mesma ação 3× -> força vision 1×; se persistir -> stop
+            # guard 3: anti-repetição — mesma ação 3x vira last_error p/ o
+            # planner (ele decide outra coisa); se persistir -> stop.
             k = _key(dec.action)
             history.append(k)
             if len(history) >= 3 and history[-1] == history[-2] == history[-3]:
-                if not forced_vision and not ctx.get("no_vision") and vocaela is not None:
-                    print("mesma acao 3x -> forcando vision fallback 1x")
-                    forced_vision = True
+                if not ctx.get("loop_warned"):
+                    ctx["loop_warned"] = True
                     history.clear()
-                    continue
+                    if fail_step("repeticao", f"você repetiu {dec.action.type} 3 vezes "
+                                              "sem avançar; escolha uma ação DIFERENTE."):
+                        continue
+                    result = "stuck"
+                    break
                 print("loop persistente -> stop.")
                 _log({"step": step, "event": "loop"})
                 result = "loop"
@@ -450,12 +455,15 @@ def run(instruction: str, cfg: dict) -> dict:
             e0 = time.perf_counter()
             try:
                 desc = execute(dec.action)
-            except (ValueError, AssertionError) as e:
-                # ex: clique fora da tela -> para com mensagem, nunca clica no escuro
-                print(f"PARADO step {step}: ação recusada: {e}")
+            except ValueError as e:
+                # coords fora da tela, app fora da whitelist...: o planner
+                # recebe o motivo e tenta outra coisa; nunca clica no escuro.
                 _log({"step": step, "event": "refused", "error": str(e)})
+                if fail_step("acao recusada", str(e)):
+                    continue
                 result = "stuck"
                 break
+            retries = 0
             exec_ms = (time.perf_counter() - e0) * 1000
             metrics["execution_ms"] += exec_ms
             emit("EXEC", desc, f"{exec_ms:.0f}ms")
@@ -464,7 +472,10 @@ def run(instruction: str, cfg: dict) -> dict:
             if src == "vocaela" and tm.get("visual"):
                 va = tm["visual"]
                 label = (f'visual "{tm.get("planner_decision", {}).get("instruction", "")}"'
-                         f" -> {va.get('type')}({va.get('x')},{va.get('y')})")
+                         f" -> {va.get('type')}")
+            if dec.action.type == "answer":
+                # observação textual do Vocaela: devolve ao planner, sem input
+                ctx["last_error"] = f"visão respondeu: {dec.action.text}"[:300]
             ctx["hist_labels"].append(label)
 
             if dec.action.type == "done":
@@ -479,8 +490,8 @@ def run(instruction: str, cfg: dict) -> dict:
                   "verify": vnote, "timings": tm,
                   "cpu": psutil.cpu_percent(interval=None),
                   "mem": round(psutil.virtual_memory().percent, 1)})
-            step_ms = (time.perf_counter() - s0) * 1000
-            metrics["step_ms"] += step_ms
+            metrics["step_ms"] += (time.perf_counter() - s0) * 1000
+            step += 1
             time.sleep(0.3)
         else:
             result = "max_steps"
@@ -496,15 +507,15 @@ def run(instruction: str, cfg: dict) -> dict:
         except Exception:
             pass
 
-    total_ms = (time.perf_counter() - total0) * 1000
+    total_ms = time.perf_counter() - total0
     print(f"\n{result.upper()}")
-    print(f"Total: {total_ms / 1000:.1f}s")
+    print(f"Total: {total_ms:.1f}s")
     pcalls = metrics["planner_calls"]
     vcalls = metrics["vision_calls"]
-    summary = {"test": instruction, "result": result, "mode": mode,
-               "steps": metrics["steps"],
+    summary = {"test": instruction, "result": result,
+               "steps": metrics["steps"], "retries": metrics["retries"],
                "planner_calls": pcalls, "vocaela_calls": vcalls,
-               "total_s": round(total_ms / 1000, 1),
+               "total_s": round(total_ms, 1),
                "avg_planner_ms": round(metrics["planner_ms"] / pcalls, 1) if pcalls else 0,
                "avg_vision_ms": round(metrics["vision_ms"] / vcalls, 1) if vcalls else 0,
                "ram_pct": round(psutil.virtual_memory().percent, 1),

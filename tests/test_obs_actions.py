@@ -59,5 +59,182 @@ class TestCropVirtualDesktop(unittest.TestCase):
         self.assertEqual((act.x, act.y), (-1300, 350))
 
 
+class _FakeAuto:
+    """pyautogui falso: grava chamadas."""
+    FAILSAFE = True
+    PAUSE = 0
+
+    def __init__(self):
+        self.calls: list[tuple] = []
+
+    def __getattr__(self, name):
+        def rec(*a, **k):
+            self.calls.append((name, a, k))
+        return rec
+
+
+class TestExecute(unittest.TestCase):
+    def setUp(self):
+        import actions
+
+        self.actions = actions
+        self.fake = _FakeAuto()
+        self._orig = (actions.pyautogui, actions._check_coords, actions._type_unicode)
+        actions.pyautogui = self.fake
+        actions._check_coords = lambda x, y: None
+        self.typed: list[str] = []
+        actions._type_unicode = self.typed.append
+
+    def tearDown(self):
+        (self.actions.pyautogui, self.actions._check_coords,
+         self.actions._type_unicode) = self._orig
+
+    def test_type_unicode_inteiro(self):
+        from schemas import Action
+
+        self.actions.execute(Action(type="type", text="Olá, não é ASCII — 100%"))
+        self.assertEqual(self.typed, ["Olá, não é ASCII — 100%"])
+
+    def test_escape_send_keys(self):
+        self.assertEqual(self.actions.escape_for_send_keys("a+b^c%d~e(f){g}"),
+                         "a{+}b{^}c{%}d{~}e{(}f{)}{{}g{}}")
+        self.assertEqual(self.actions.escape_for_send_keys("Olá mundo"), "Olá mundo")
+
+    def test_hotkey_presses(self):
+        from schemas import Action
+
+        d = self.actions.execute(Action(type="hotkey", key="down", presses=3))
+        self.assertEqual([c[0] for c in self.fake.calls], ["hotkey"] * 3)
+        self.assertEqual(d, "hotkey(down)x3")
+
+    def test_middle_click_e_hscroll(self):
+        from schemas import Action
+
+        self.actions.execute(Action(type="middle_click", x=10, y=10))
+        self.actions.execute(Action(type="scroll", text="-800", key="left"))
+        self.actions.execute(Action(type="scroll", text="800", key="up"))
+        names = [c[0] for c in self.fake.calls]
+        self.assertIn("middleClick", names)
+        self.assertIn("hscroll", names)
+        self.assertIn("scroll", names)
+
+    def test_answer_e_noop(self):
+        from schemas import Action
+
+        d = self.actions.execute(Action(type="answer", text="15"))
+        self.assertEqual(d, "answer(15)")
+        self.assertEqual(self.fake.calls, [])
+
+    def test_sem_xy_levanta_valueerror(self):
+        from schemas import Action
+
+        with self.assertRaises(ValueError):
+            self.actions.execute(Action(type="click"))
+        with self.assertRaises(ValueError):
+            self.actions.execute(Action(type="type", text=""))
+
+
+class TestToolsWhitelist(unittest.TestCase):
+    def setUp(self):
+        import os
+
+        import tools
+
+        self.tools = tools
+        self.opened: list[str] = []
+        self._orig = (os.startfile, tools.time.sleep)
+        os.startfile = self.opened.append
+        tools.time.sleep = lambda s: None
+
+    def tearDown(self):
+        import os
+
+        os.startfile, self.tools.time.sleep = self._orig
+
+    def test_whitelist_aceita_alias(self):
+        for t in ("notepad.exe", "Bloco de Notas", "calc", "edge"):
+            self.tools.open_app(t)
+        self.assertEqual(self.opened, ["notepad", "notepad", "calc", "msedge"])
+
+    def test_launch_fallback_popen_em_lista(self):
+        import os
+        import subprocess
+
+        def boom(_):
+            raise OSError("sem App Paths")
+        os.startfile = boom
+        calls: list = []
+        orig = subprocess.Popen
+        subprocess.Popen = lambda args, **k: calls.append(args)
+        try:
+            self.tools.open_app("msedge")
+        finally:
+            subprocess.Popen = orig
+        self.assertEqual(calls, [["msedge"]])  # lista, nunca shell=True
+
+    def test_fora_da_whitelist_recusa(self):
+        for bad in ("powershell", "notepad & del x", 'cmd /c start "" x'):
+            with self.assertRaises(ValueError):
+                self.tools.open_app(bad)
+        self.assertEqual(self.opened, [])
+
+    def test_open_url_valida_e_abre_sem_shell(self):
+        a = self.tools.open_url("https://example.com/?q=a&b=c")
+        self.assertEqual(a.type, "open")
+        self.tools.open_app(a.target)
+        self.assertEqual(self.opened, ["https://example.com/?q=a&b=c"])
+        for bad in ("file:///c:/x", "javascript:alert(1)", 'http://a" & calc',
+                    "example.com"):
+            with self.assertRaises(ValueError):
+                self.tools.open_url(bad)
+
+
+class TestVocaelaSemantica(unittest.TestCase):
+    def test_presses_middle_hscroll_answer(self):
+        import vocaela
+
+        va = vocaela.parse_vocaela_output(
+            '<Action>[{"action": "PRESS_KEY", "key": "down", "presses": 3}]</Action>')
+        self.assertEqual((va.type, va.key, va.presses), ("key", "down", 3))
+        act = vocaela.visual_to_action(va, (100, 100))
+        self.assertEqual((act.type, act.presses), ("hotkey", 3))
+
+        va = vocaela.parse_vocaela_output(
+            '<Action>[{"action": "MIDDLE_CLICK", "coordinate": [0.5, 0.5]}]</Action>')
+        self.assertEqual(vocaela.visual_to_action(va, (100, 100)).type, "middle_click")
+
+        va = vocaela.parse_vocaela_output(
+            '<Action>[{"action": "SCROLL", "scroll_direction": "left"}]</Action>')
+        act = vocaela.visual_to_action(va, (100, 100))
+        self.assertEqual((act.type, act.key), ("scroll", "left"))
+
+        va = vocaela.parse_vocaela_output(
+            '<Action>[{"action": "ANSWER", "text": "15"}]</Action>')
+        act = vocaela.visual_to_action(va, (100, 100))
+        self.assertEqual((act.type, act.text), ("answer", "15"))
+
+    def test_multiplas_conta_descartadas(self):
+        import vocaela
+
+        va = vocaela.parse_vocaela_output(
+            '<Action>[{"action": "click", "coordinate": [0.2, 0.3]}, '
+            '{"action": "type", "text": "oi"}]</Action>')
+        self.assertEqual((va.type, va.dropped), ("click", 1))
+        with self.assertRaises(ValueError):
+            vocaela.parse_vocaela_output("<Action>[]</Action>")
+
+
+class TestSafetyHotkey(unittest.TestCase):
+    def test_hotkey_vem_do_config_e_sem_esc_puro(self):
+        import safety
+
+        src = (ROOT / "safety.py").read_text(encoding="utf-8")
+        self.assertNotIn('is_pressed("esc")', src)
+        # sem subir thread/hook real: só a normalização
+        self.assertEqual(safety.normalize_hotkey(" Ctrl+Shift+Q "), "ctrl+shift+q")
+        self.assertEqual(safety.normalize_hotkey(None), "ctrl+alt+esc")
+        self.assertEqual(safety.normalize_hotkey(""), "ctrl+alt+esc")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

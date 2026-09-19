@@ -3,7 +3,7 @@
 > Arquivo de memória para agentes. Atualize ao mudar arquitetura, plano de
 > testes ou descobrir quirk de plataforma. Idioma do repo: PT-BR.
 
-## Arquitetura (2 modelos, decisão 100% por IA)
+## Arquitetura (2 modelos; Python executa/observa/veta, nunca escolhe)
 
 - **Planner MiniCPM5-1B** (`:8091`, só texto, nunca recebe screenshot, nunca
   emite coordenadas) → **Vocaela-2** (`:8082`, screenshot → ação visual 0..1)
@@ -11,6 +11,12 @@
 - Ordem: `open/focus/type` (planner) → `uia_click` por NOME → Vocaela
   (só quando o elemento não está na accessibility tree).
 - Sem modelos online = erro honesto, sem fallback programático.
+- Guard-rails determinísticos declarados (`loop.py`): bootstrap da janela do
+  app ANTES do planner; anti-janela-errada e anti-repetição viram
+  `last_error` p/ o planner; retries (`MAX_RETRIES=3`) NÃO consomem
+  `max_steps`. `open_app` = whitelist (`tools.APP_COMMANDS`), `open_url` só
+  http(s), nada passa por shell.
+- Revisão completa + roadmap: `docs/revisao-codebase-2026-09-18.md`.
 - Arquivos-chave: `main.py` (CLI), `loop.py` (observe→decide→act→verify),
   `planner.py`, `vocaela.py`, `uia.py`, `actions.py`, `tools.py`,
   `safety.py`, `config.py`, `obs.py`.
@@ -19,6 +25,7 @@
 
 ```powershell
 uv run python -m unittest discover -s tests   # suite oficial (sempre via uv)
+uv run ruff check                             # lint (dev-deps do pyproject)
 uv run python main.py --self-test             # sem clicar em nada
 uv run python main.py "..." --config config.sandbox.json --max-steps 4
 ```
@@ -38,8 +45,11 @@ cada abertura é um ambiente limpo descartável.
 ## Segurança (nunca relaxar)
 
 - `pyautogui.FAILSAFE = True` (`actions.py`); hotkey `ctrl+alt+esc`
-  (`safety.py`). Começar com `--max-steps 4`. Nunca rodar cliques no host
-  enquanto o usuário usa o PC — usar o Sandbox.
+  (`safety.py`, configurável via `stop_hotkey`; ESC puro NÃO aborta — o
+  agente usa `press_key esc`). Começar com `--max-steps 4`. Nunca rodar
+  cliques no host enquanto o usuário usa o PC — usar o Sandbox.
+- `type` usa `pywinauto.keyboard.send_keys` (Unicode); `pyautogui.typewrite`
+  descarta acentos em silêncio no Windows.
 
 ## Quirks descobertos (não redescobrir)
 
@@ -72,6 +82,12 @@ cada abertura é um ambiente limpo descartável.
   marker): o dispatch usa `start` SEM título vazio (provado T1-T5 em
   18/09: mapping ok, ps direto ok, agent foreground ok, detach sem
   título ok).
+- Arquivos `.py` já entraram com UTF-8 duplo + BOM (mojibake no prompt do
+  planner); `test_cleanup.test_sem_mojibake_nem_bom` trava. `.editorconfig`
+  + `.gitattributes` fixam UTF-8/LF (`.ps1` CRLF).
+- `mss.monitors[0]` é o desktop VIRTUAL (left/top podem ser negativos);
+  `obs.crop_to_rect` converte tela↔pixel. `uv sync` dentro do Sandbox usa
+  `UV_PROJECT_ENVIRONMENT` fora de `C:\crr` (senão sobrescreve o `.venv` do host).
 - Timeouts das ferramentas em ms; trial no Sandbox leva ~1 min
   (sem `-Bootstrap`).
 

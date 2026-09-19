@@ -3,111 +3,7 @@ from __future__ import annotations
 
 import time
 
-from schemas import UIElement
-
 MAX_DEPTH = 6
-MAX_ELEMENTS = 300
-
-
-def snapshot(timeout: float = 5.0) -> list[UIElement]:
-    """Lista elementos visíveis das janelas top-level. Podado p/ ser rápido."""
-    from pywinauto import Desktop
-
-    out: list[UIElement] = []
-    t0 = time.perf_counter()
-    try:
-        desk = Desktop(backend="uia")
-        windows = desk.windows(top_level_only=True, visible_only=True)
-    except Exception:
-        return out
-
-    def walk(elem, depth: int) -> None:
-        if len(out) >= MAX_ELEMENTS or depth > MAX_DEPTH:
-            return
-        if time.perf_counter() - t0 > timeout:
-            return
-        try:
-            info = elem.element_info
-            name = (getattr(info, "name", "") or "")[:120]
-            aid = (getattr(info, "automation_id", "") or "")[:120]
-            ctype = (getattr(info, "control_type", "") or "")[:60]
-            try:
-                r = info.rectangle
-                rect = (r.left, r.top, r.right, r.bottom)
-            except Exception:
-                rect = (0, 0, 0, 0)
-            # ignora elementos totalmente vazios/invisíveis minúsculos
-            if name or aid:
-                out.append(UIElement(name=name, automation_id=aid,
-                                     control_type=str(ctype), rect=rect, depth=depth))
-            for child in elem.children():
-                walk(child, depth + 1)
-                if len(out) >= MAX_ELEMENTS:
-                    break
-        except Exception:
-            return
-
-    for w in windows[:20]:  # limita janelas p/ velocidade
-        try:
-            walk(w, 0)
-        except Exception:
-            continue
-        if len(out) >= MAX_ELEMENTS or time.perf_counter() - t0 > timeout:
-            break
-    return out
-
-
-def find_window_titles() -> list[str]:
-    from pywinauto import Desktop
-
-    try:
-        desk = Desktop(backend="uia")
-        return [w.window_text() for w in desk.windows(top_level_only=True, visible_only=True)][:40]
-    except Exception:
-        return []
-
-
-def foreground_title() -> str:
-    """Título da janela em foreground (barato, p/ guard de foco)."""
-    try:
-        import ctypes
-
-        from pywinauto import Desktop
-
-        desk = Desktop(backend="uia")
-        try:
-            h = ctypes.windll.user32.GetForegroundWindow()
-            if h:
-                t = desk.window(handle=h).window_text() or ""
-                if t.strip():
-                    return t
-        except Exception:
-            pass
-        # fallback: janela com foco / primeira com título
-        try:
-            wins = desk.windows(top_level_only=True, visible_only=True)
-        except Exception:
-            return ""
-        for w in wins:
-            try:
-                for attr in ("has_focus", "is_active", "has_keyboard_focus"):
-                    fn = getattr(w, attr, None)
-                    if callable(fn) and fn():
-                        t = w.window_text() or ""
-                        if t.strip():
-                            return t
-            except Exception:
-                continue
-        for w in wins:
-            try:
-                t = w.window_text() or ""
-                if t.strip():
-                    return t
-            except Exception:
-                continue
-    except Exception:
-        pass
-    return ""
 
 
 def active_window_snapshot(timeout: float = 5.0,
@@ -190,22 +86,20 @@ def active_window_snapshot(timeout: float = 5.0,
             try:
                 info = elem.element_info
                 name = (getattr(info, "name", "") or "").strip()[:120]
-                if not name:
-                    pass  # ainda desce p/ filhos
                 ctype = str(getattr(info, "control_type", "") or "")[:60]
                 try:
                     r = info.rectangle
                     bounds = (r.left, r.top, r.right, r.bottom)
                 except Exception:
                     bounds = (0, 0, 0, 0)
-                l, t, rr, b = bounds
-                area_ok = (rr - l) > 4 and (b - t) > 4
-                cx, cy = (l + rr) // 2, (t + b) // 2
+                bl, bt, br, bb = bounds
+                area_ok = (br - bl) > 4 and (bb - bt) > 4
+                cx, cy = (bl + br) // 2, (bt + bb) // 2
                 on_screen = vx <= cx < vx + vw and vy <= cy < vy + vh
                 inside = True
                 if wrect is not None:
                     wl, wt, wrr, wb = wrect
-                    inside = not (rr < wl or l > wrr or b < wt or t > wb)
+                    inside = not (br < wl or bl > wrr or bb < wt or bt > wb)
                 if name and area_ok and inside and on_screen:
                     items.append({"id": len(items), "name": name,
                                   "type": ctype, "bounds": list(bounds)})
@@ -220,10 +114,3 @@ def active_window_snapshot(timeout: float = 5.0,
         return items, title, wrect
     except Exception:
         return [], "", None
-
-
-if __name__ == "__main__":
-    els = snapshot()
-    print(f"elements={len(els)}")
-    for e in els[:15]:
-        print(f"  [{e.control_type}] name={e.name!r} aid={e.automation_id!r} rect={e.rect}")

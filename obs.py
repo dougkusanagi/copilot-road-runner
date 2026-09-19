@@ -46,10 +46,10 @@ def _foreground_rect() -> tuple[int, int, int, int] | None:
         r = (ctypes.c_long * 4)()
         if not u.GetWindowRect(h, r):
             return None
-        l, t, rr, b = (r[0], r[1], r[2], r[3])
-        if rr - l < 50 or b - t < 50:
+        left, top, right, bottom = (r[0], r[1], r[2], r[3])
+        if right - left < 50 or bottom - top < 50:
             return None
-        return (l, t, rr, b)
+        return (left, top, right, bottom)
     except Exception:
         return None
 
@@ -79,10 +79,10 @@ def crop_to_rect(full: Image.Image, virtual_origin: tuple[int, int],
     fw, fh = full.size
     vx, vy = virtual_origin
     if rect:
-        l, t, rr, b = rect
+        left, top, right, bottom = rect
         # tela -> pixel da imagem, limitado à imagem
-        pl, pt = max(0, l - vx), max(0, t - vy)
-        pr, pb = min(fw, rr - vx), min(fh, b - vy)
+        pl, pt = max(0, left - vx), max(0, top - vy)
+        pr, pb = min(fw, right - vx), min(fh, bottom - vy)
         if pr - pl >= 50 and pb - pt >= 50:
             return full.crop((pl, pt, pr, pb)), (pl + vx, pt + vy), (fw, fh)
     return full, (vx, vy), (fw, fh)

@@ -14,5 +14,18 @@ dependencies = [
   "psutil>=6.0.0",
 ]
 
+[dependency-groups]
+dev = ["ruff>=0.6"]
+
 [tool.ruff]
 line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E402"]  # imports tardios sao intencionais (pyautogui/pywinauto)
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]
+# prompts verbatim dos model cards (Vocaela) e TOOLS_SPEC: nao quebrar linhas
+"vocaela.py" = ["E501"]
+"planner.py" = ["E501"]

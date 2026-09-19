@@ -58,7 +58,6 @@ def _make_click_through(win) -> None:
 def show() -> None:
     """Bloqueante: mostra o overlay na thread principal (rode em processo próprio)."""
     import ctypes
-    import math
     import tkinter as tk
 
     mons = _monitors()
