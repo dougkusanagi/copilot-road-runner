@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 .uv/
 last.png
+overlay_proof*.png
 run.jsonl
 run-*/
 config.sandbox.json

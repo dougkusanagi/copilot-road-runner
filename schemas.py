@@ -7,8 +7,7 @@ from pydantic import BaseModel, Field
 
 ActionType = Literal["click", "double_click", "right_click", "move", "drag", "type",
                       "scroll", "hotkey", "open", "focus", "wait", "done"]
-SourceType = Literal["deterministic", "planner", "uia", "scorer", "vlm", "vocaela",
-                       "fallback"]
+SourceType = Literal["planner", "uia", "vocaela"]
 
 
 class UIElement(BaseModel):

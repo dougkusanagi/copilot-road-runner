@@ -429,9 +429,9 @@ def run(instruction: str, cfg: dict) -> dict:
                 elif src == "uia":
                     emit("PLANNER", f'uia: {dec.reason}',
                          f'{tm.get("planner_ms", 0):.0f}ms')
-                else:
-                    emit("SCORER", dec.reason or f'{tm.get("scorer_top")}',
-                         f'{tm.get("scorer_ms", 0):.0f}ms | conf {dec.confidence:.2f}')
+                else:  # pragma: no cover — decide() só retorna planner/uia/vocaela
+                    emit("PLANNER", dec.reason or src,
+                         f'{tm.get("planner_ms", 0):.0f}ms')
 
             # anti-loop: mesma ação 3× -> força vision 1×; se persistir -> stop
             k = _key(dec.action)

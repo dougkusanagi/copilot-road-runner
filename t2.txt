@@ -1,5 +1,0 @@
-planner parser OK
-vocaela parser OK
-visual_to_action OK
-loop extractors OK
-TODOS OS TESTES OK
