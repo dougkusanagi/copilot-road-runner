@@ -106,6 +106,7 @@ Protocolo (`.sandbox-job\<id>\` ↔ `C:\job`):
 | winget lento na primeira abertura | normal: Python+uv instalam a cada boot (Sandbox não tem snapshot); deixe o `bootstrap.ps1` terminar |
 | job do agente sem resposta | `Invoke-SandboxTest.ps1` estourou `-TimeoutSec` → aumente o timeout; com `-KeepOpen`, abra o Sandbox e leia `C:\job\out\` |
 | job sem nem `started.marker` | `LogonCommand` não rodou (boot/logon travou) → feche o Sandbox e rode de novo; timeout também fecha o Sandbox sozinho (abort externo/Ctrl+C não — conferir órfãos com `Get-Process *Sandbox*`) |
+| `LogonCommand` nunca dispara (mapeamento ok, nenhum console abre) | confirmado nesta máquina em 18/09 (manual e automático) → fallback: abra o Sandbox e rode à mão no PowerShell de dentro: `powershell -ExecutionPolicy Bypass -File C:\crr\sandbox\bootstrap.ps1` (ou `agent.ps1 -JobDir C:\job` num `.wsb` de agente) |
 | Sandbox órfão (Server/RemoteSession vivos, sem janela) | `finally` matava só `WindowsSandboxClient` → corrigido p/ cobrir os 3 nomes; órfão antigo: `Stop-Process -Name WindowsSandboxServer,WindowsSandboxRemoteSession`; pasta do job fica travada até a VM morrer (nunca matar `vmwp` às cegas — WSL usa outro) |
 | `.sandbox-job\` crescendo | jobs antigos não são apagados sozinhos → limpe a pasta de vez em quando |
 | Sandbox não abre | recurso desabilitado ou sem virtualização → habilite Windows Sandbox + VT-x/AMD-V na BIOS |

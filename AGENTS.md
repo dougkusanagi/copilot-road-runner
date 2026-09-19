@@ -63,6 +63,12 @@ cada abertura é um ambiente limpo descartável.
   (Ctrl+C no host) não passa pelo `finally` — conferir órfãos com
   `Get-Process *Sandbox*` e limpar `.sandbox-job\` à mão (pasta travada
   = VM ainda viva; nunca matar `vmwp` às cegas — WSL usa outro).
+- `LogonCommand` do `.wsb` NÃO dispara nesta máquina (confirmado manual
+  em 18/09: `C:\crr` mapeia e aparece no Explorer, mas nenhum console abre
+  sozinho — nem `bootstrap.ps1`, nem `agent.ps1`). Canal automático do
+  agente inoperante aqui; fallback = abrir o Sandbox e rodar o script à
+  mão no PowerShell de dentro (`bootstrap.ps1` ou `agent.ps1 -JobDir`).
+  Só um Sandbox por vez — fechar o manual antes de qualquer trial meu.
 - Timeouts das ferramentas em ms; trial no Sandbox leva ~1 min
   (sem `-Bootstrap`).
 
