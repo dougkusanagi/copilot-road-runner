@@ -142,14 +142,15 @@ class TestToolsWhitelist(unittest.TestCase):
 
         self.tools = tools
         self.opened: list[str] = []
-        self._orig = (os.startfile, tools.time.sleep)
+        self._orig = (os.startfile, tools.time.sleep, tools.focus_window)
         os.startfile = self.opened.append
         tools.time.sleep = lambda s: None
+        tools.focus_window = lambda hint, timeout=2.0: True  # open foca; sem GUI
 
     def tearDown(self):
         import os
 
-        os.startfile, self.tools.time.sleep = self._orig
+        os.startfile, self.tools.time.sleep, self.tools.focus_window = self._orig
 
     def test_whitelist_aceita_alias(self):
         for t in ("notepad.exe", "Bloco de Notas", "calc", "edge"):
@@ -183,6 +184,26 @@ class TestToolsWhitelist(unittest.TestCase):
         self.assertFalse(hasattr(self.tools, "open_url"))
         with self.assertRaises(ValueError):
             self.tools.open_app("https://example.com/produto-x")
+
+    def test_open_relata_janela_ativa(self):
+        orig = self.tools.focus_window
+        seen = {}
+        self.tools.focus_window = lambda hint, timeout=2.0: seen.update(hint=hint) or True
+        try:
+            d = self.tools.open_app("chrome")
+        finally:
+            self.tools.focus_window = orig
+        self.assertIn("(janela ativa)", d)
+        self.assertEqual(seen["hint"], "chrome")
+
+    def test_open_relata_sem_primeiro_plano(self):
+        orig = self.tools.focus_window
+        self.tools.focus_window = lambda hint, timeout=2.0: False
+        try:
+            d = self.tools.open_app("chrome")
+        finally:
+            self.tools.focus_window = orig
+        self.assertIn("ainda não em primeiro plano", d)
 
 
 class TestVocaelaSemantica(unittest.TestCase):

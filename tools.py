@@ -15,11 +15,26 @@ APP_COMMANDS = {
 }
 
 
+_FOCUS_HINTS = {
+    "msedge": "edge||msedge", "edge": "edge||msedge",
+    "microsoft edge": "edge||msedge",
+    "chrome": "chrome", "brave": "brave",
+    "notepad": "bloco de notas||notepad", "notepad.exe": "bloco de notas||notepad",
+    "bloco de notas": "bloco de notas||notepad",
+    "calc": "calculadora||calculator", "calc.exe": "calculadora||calculator",
+    "calculator": "calculadora||calculator", "calculadora": "calculadora||calculator",
+}
+
+
 def open_app(target: str) -> str:
     """Abre app da whitelist via ShellExecute (App Paths resolve msedge etc.).
 
     Equivale a clicar no ícone/Menu Iniciar: a partir daqui tudo é UI
     (teclado/mouse/tela). Nunca usa shell=True: sem injeção via `&`, `"` ou `%`.
+
+    Lançar ≠ estar em primeiro plano (cold start lento, foreground-lock do
+    Windows): por isso tenta o focus em seguida e RELATA o resultado —
+    o planner precisa saber se a janela está ativa antes de agir dentro dela.
     """
     key = target.strip().lower()
     exe = APP_COMMANDS.get(key)
@@ -28,7 +43,9 @@ def open_app(target: str) -> str:
                          f"use um de {sorted(set(APP_COMMANDS.values()))}")
     _launch(exe)
     time.sleep(1.2)
-    return f"opened {exe}"
+    if focus_window(_FOCUS_HINTS.get(key, key), timeout=2.0):
+        return f"opened {exe} (janela ativa)"
+    return f"opened {exe} (janela ainda não em primeiro plano)"
 
 
 def _launch(exe: str) -> None:

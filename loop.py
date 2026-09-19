@@ -550,7 +550,8 @@ def run(instruction: str, cfg: dict) -> dict:
                     "open", "focus", "type", "hotkey", "wait", "answer", "done"):
                 a = dec.action
                 arg = a.target or a.text or a.key or ""
-                emit("PLANNER", f'{a.type}("{arg}")',
+                seen = (tm.get("uia_title", "") or "?")[:40]
+                emit("PLANNER", f'{a.type}("{arg}") [viu: {seen!r}]',
                      f'{tm.get("planner_ms", 0):.0f}ms')
             else:
                 if tm.get("uia_count") is not None:
