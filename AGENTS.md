@@ -13,12 +13,15 @@
 - Planner com `response_format: json_schema` (coordenadas impossíveis por
   construção); contexto UIA como `tipo:nome` (interativos primeiro);
   Vocaela recebe as últimas 3 ações como histórico.
-- Runtime próprio (`server.py`): endpoints locais caídos → baixa llama.cpp
-  + GGUFs p/ `models/` (gitignored, 1ª vez) e sobe `:8091`/`:8082`;
+- Runtime próprio (`server.py`), padrão e sem parâmetros: endpoints locais
+  caídos → baixa llama.cpp + GGUFs p/ `models/` (gitignored, 1ª vez) e sobe
+  `:8091`/`:8082` (portas fora do padrão: sem conflito com Ollama 11434 /
+  LM Studio 1234; nenhuma dependência de `llama-server` externo);
   endpoint vivo é reusado, porta ocupada sem endpoint = erro honesto.
   `runtime.auto_start: false` ou `--no-runtime` desliga; URLs remotas
-  (Sandbox → HOST_IP) nunca baixam aqui. `uv run python -m server`
-  deixa os dois no ar (`--host 0.0.0.0` p/ o Sandbox).
+  (Sandbox → HOST_IP, só em testes dev) nunca baixam aqui.
+  `uv run python -m server` deixa os dois no ar (`--host 0.0.0.0` só p/
+  expor ao Sandbox em testes).
 - Sem modelos online = erro honesto, sem fallback programático.
 - Guard-rails determinísticos declarados (`loop.py`): bootstrap da janela do
   app ANTES do planner; anti-janela-errada e anti-repetição viram
@@ -44,7 +47,7 @@
 uv run python -m unittest discover -s tests   # suite oficial (sempre via uv)
 uv run ruff check                             # lint (dev-deps do pyproject)
 uv run python main.py --self-test             # sem clicar em nada
-uv run python main.py "..." --config config.sandbox.json --max-steps 4
+uv run python main.py "..." --max-steps 4     # uso real: local, sem parâmetros
 ```
 
 Use **uv** — o python do sistema não tem as deps (`pyautogui` etc.).
@@ -53,7 +56,13 @@ Sandbox: `.\scripts\Start-Sandbox.ps1` (uso manual, sem admin) e
 `-Bootstrap` faz a bateria completa — 1ª vez demora minutos no winget).
 Detalhes em `docs/sandbox-test-env.md`.
 
-## Plano de teste = Windows Sandbox (Hyper-V VM foi removida)
+## Plano de teste = Windows Sandbox (só p/ testes dev; uso real é local)
+
+Uso real: `uv run python main.py "..."` no host, sem parâmetros (runtime
+próprio sobe os modelos sozinho). O Sandbox serve SÓ para testes dev com
+cliques descartáveis, acionado apenas pelos scripts abaixo — nunca passar
+`--config config.sandbox.json` no host (esse arquivo só existe dentro do
+Sandbox, gerado pelo `bootstrap.ps1`).
 
 Histórico: a VM Hyper-V (`crr-test`, scripts `New-TestVm/Reset-TestVm`)
 foi removida em favor do Sandbox (commit `3e87285`) — menos setup manual,
@@ -63,8 +72,9 @@ cada abertura é um ambiente limpo descartável.
 
 - `pyautogui.FAILSAFE = True` (`actions.py`); hotkey `ctrl+alt+esc`
   (`safety.py`, configurável via `stop_hotkey`; ESC puro NÃO aborta — o
-  agente usa `press_key esc`). Começar com `--max-steps 4`. Nunca rodar
-  cliques no host enquanto o usuário usa o PC — usar o Sandbox.
+  agente usa `press_key esc`). Começar com `--max-steps 4`. Uso real roda
+  no host (não use o PC enquanto age); testes dev com cliques vão no
+  Sandbox.
 - `type` usa `pywinauto.keyboard.send_keys` (Unicode); `pyautogui.typewrite`
   descarta acentos em silêncio no Windows.
 

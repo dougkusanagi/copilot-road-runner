@@ -1,8 +1,15 @@
 """Config do MVP de 2 modelos: MiniCPM5-1B (planner) + Vocaela-2-500M (visão).
 
-Dois servidores locais (podem ser llama.cpp, LM Studio ou outro runtime):
+Uso real é local e sem parâmetros: o runtime próprio (`server.py`) baixa
+llama.cpp + GGUFs p/ `models/` na 1ª vez e sobe os endpoints abaixo
+sozinho (nenhuma dependência de `llama-server` externo). Portas fora do
+padrão (sem conflito com Ollama 11434 / LM Studio 1234):
+
   planner: http://127.0.0.1:8091/v1   (MiniCPM5-1B, texto, SEM screenshots)
   vision:  http://127.0.0.1:8082/v1   (Vocaela-2-500M-1024R2, screenshot+instrução)
+
+URLs remotas (ex.: HOST_IP no `config.sandbox.json`, gerado dentro do
+Sandbox) são só p/ testes dev via scripts — nunca baixam modelos aqui.
 
 Migra config.json legado (base_url/vision_model) automaticamente.
 """

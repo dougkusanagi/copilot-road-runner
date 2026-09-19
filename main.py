@@ -1,8 +1,12 @@
-"""CLI: python main.py  →  > Abra o Notepad e escreva Hello World
+"""CLI: python main.py "faça X"  →  uso real, local, sem parâmetros.
 
-Arquitetura de 2 modelos (config.json):
+Arquitetura de 2 modelos (config.json + runtime próprio server.py,
+que baixa e sobe tudo sozinho na 1ª vez):
   planner MiniCPM5-1B  http://127.0.0.1:8091/v1  (texto, sem screenshots)
   visão   Vocaela-2    http://127.0.0.1:8082/v1  (screenshot → ação visual)
+
+O Sandbox é só p/ testes dev (via scripts); nunca passar
+--config config.sandbox.json no host.
 """
 from __future__ import annotations
 

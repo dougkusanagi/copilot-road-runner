@@ -459,6 +459,13 @@ direção — o `ParseFile` do PowerShell e o `_render_wsb` → XML são o model
 > Pendentes: §6.2 (run dir/dry-run), §6.3 resto (LICENSE — escolha do autor),
 > §7 (harness), §4.2/4.4/4.5 (invoker `-Reuse`/`-Prune`, cache por boot),
 > P3 (`Config` pydantic, `httpx.Client` reutilizado, timeouts menores).
+> Decisão 19/09 (pós-revisão): o uso real é **sempre local e sem
+> parâmetros** (`uv run python main.py "..."`; runtime próprio em
+> `:8091`/`:8082`, portas fora do padrão, sem dependência de
+> `llama-server` externo); o Sandbox serve **só p/ testes dev** via
+> scripts (nunca `--config config.sandbox.json` no host). Docs
+> corrigidas: `README.md` (seção "Uso real"), `docs/sandbox-test-env.md`,
+> `AGENTS.md` (comandos, segurança, plano de teste).
 
 | Prioridade | Item | Esforço | Seção |
 |---|---|---|---|
