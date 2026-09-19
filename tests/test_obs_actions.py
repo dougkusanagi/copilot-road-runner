@@ -178,15 +178,11 @@ class TestToolsWhitelist(unittest.TestCase):
                 self.tools.open_app(bad)
         self.assertEqual(self.opened, [])
 
-    def test_open_url_valida_e_abre_sem_shell(self):
-        a = self.tools.open_url("https://example.com/?q=a&b=c")
-        self.assertEqual(a.type, "open")
-        self.tools.open_app(a.target)
-        self.assertEqual(self.opened, ["https://example.com/?q=a&b=c"])
-        for bad in ("file:///c:/x", "javascript:alert(1)", 'http://a" & calc',
-                    "example.com"):
-            with self.assertRaises(ValueError):
-                self.tools.open_url(bad)
+    def test_sem_teleporte_para_url(self):
+        # open_url foi removido: navegar é pela UI do navegador, como um humano.
+        self.assertFalse(hasattr(self.tools, "open_url"))
+        with self.assertRaises(ValueError):
+            self.tools.open_app("https://example.com/produto-x")
 
 
 class TestVocaelaSemantica(unittest.TestCase):

@@ -24,7 +24,7 @@ import httpx
 from pydantic import BaseModel, field_validator, model_validator
 
 PlannerActionType = Literal[
-    "open_app", "open_url", "focus_window", "type_text", "press_key",
+    "open_app", "focus_window", "type_text", "press_key",
     "hotkey", "uia_click", "visual_action", "wait", "answer", "done",
 ]
 
@@ -32,9 +32,8 @@ PlannerActionType = Literal[
 # (Python resolve via UIA; se não achar, escala p/ visual_action sozinho).
 # visual_action = "preciso enxergar" → screenshot vai SÓ p/ o Vocaela.
 TOOLS_SPEC = """\
-- {"type":"open_app","app":"notepad|calc|msedge|chrome|brave"} — abrir aplicativo
-- {"type":"open_url","url":"https://www.amazon.com"} — abrir a HOMEPAGE no navegador padrão. NUNCA invente caminho/produto (nada de /produto-x-y/): só domínio que você conhece; a navegação até a página certa é por busca/clique depois
-- {"type":"focus_window","target":"Google"} — focar janela cujo título CONTÉM o texto (só se essa janela existe; se o app não está aberto, use open_app/open_url)
+- {"type":"open_app","app":"notepad|calc|msedge|chrome|brave"} — abrir aplicativo (equivale a clicar no ícone/Menu Iniciar; navegar É por dentro do app, como um humano)
+- {"type":"focus_window","target":"Google"} — focar janela cujo título CONTÉM o texto (só se essa janela existe; se o app não está aberto, use open_app)
 - {"type":"type_text","text":"..."} — digitar na janela focada
 - {"type":"press_key","key":"enter|esc|tab|f5"} — uma tecla
 - {"type":"hotkey","keys":"ctrl+n|ctrl+l|..."} — combinação
@@ -56,14 +55,17 @@ Rules:
   target/text/url must come from the Goal, Current window or UI elements.
 - Prefer native tools (open_app, focus_window, type_text) over visual_action.
 - If the target app is not the current window: use focus_window ONLY when a
-  window of that app is already open; otherwise use open_app (or open_url
-  for a website). NEVER focus_window a target that already missed.
+  window of that app is already open; otherwise use open_app.
+  NEVER focus_window a target that already missed.
+  There is NO teleport-to-URL tool: you navigate like a human, through the
+  browser UI (address bar, links, search boxes).
 - Web tasks, like a human, step by step:
   1. open_app the requested browser (if it is already open, focus it);
-  2. hotkey ctrl+l, type the SITE homepage (https://www.amazon.com), press enter;
+  2. hotkey ctrl+l, type a SITE homepage you KNOW (https://www.amazon.com), press enter;
   3. on the site, type in its search box + enter (uia_click/type/visual);
   4. if lost or on an error page, go back to step 2 or search on google.
-  NEVER jump straight to a deep/product URL you guessed.
+  NEVER type a deep/product URL you guessed (no /produto-x-y/ from memory):
+  subpaths are reached by clicking/searching, not by typing.
 - Use answer ONLY to report a fact you OBSERVED after navigating (e.g. the
   price on the page); then say done.
 - NEVER repeat the same action twice in a row; if it did not advance, do something else.
@@ -79,7 +81,6 @@ Rules:
 class PlannerDecision(BaseModel):
     type: PlannerActionType
     app: str | None = None
-    url: str | None = None
     target: str | None = None
     text: str | None = None
     key: str | None = None
@@ -113,7 +114,6 @@ def planner_json_schema() -> dict:
         "properties": {
             "type": {"type": "string", "enum": sorted(list(PlannerActionType.__args__))},
             "app": {"type": ["string", "null"]},
-            "url": {"type": ["string", "null"]},
             "target": {"type": ["string", "null"]},
             "text": {"type": ["string", "null"]},
             "key": {"type": ["string", "null"]},

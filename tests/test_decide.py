@@ -45,13 +45,15 @@ class TestDecideStep(unittest.TestCase):
 
     def test_generico_thread_step_sem_nameerror(self):
         # instrução sem bootstrap (want=None): step 5 precisa chegar sem erro.
+        # Navegação web é pela UI (open_app + teclado), sem teleporte p/ URL.
         self._patch_snapshot([], "Edge", None)
         dec, tm = loop.decide(
             "abra o Edge e busque preco RTX 4060", 5, {"hist_labels": []}, CFG,
-            planner=_FakePlanner(PlannerDecision(type="open_url",
-                                                 url="https://x.com")),
+            planner=_FakePlanner(PlannerDecision(type="open_app",
+                                                  app="msedge")),
             vocaela=_NoVision())
         self.assertEqual(dec.action.type, "open")
+        self.assertEqual(dec.action.target, "msedge")
         self.assertEqual(dec.source, "planner")
         self.assertEqual(tm["planner_calls"], 1)
 
@@ -141,7 +143,7 @@ class TestDecideStep(unittest.TestCase):
     def test_observe_pagina_de_erro_diz_pra_voltar(self):
         from schemas import Action
 
-        o = loop.observe(Action(type="open", target="url:https://www.amazon.com/x"),
+        o = loop.observe(Action(type="open", target="chrome"),
                          "PowerShell", "Page Not Found - Brave")
         self.assertIn("ERROR page", o)
         self.assertIn("do NOT retry the same URL", o)
@@ -149,7 +151,7 @@ class TestDecideStep(unittest.TestCase):
     def test_observe_pagina_ok_sem_hint_de_erro(self):
         from schemas import Action
 
-        o = loop.observe(Action(type="open", target="url:https://www.amazon.com"),
+        o = loop.observe(Action(type="open", target="chrome"),
                          "PowerShell", "Amazon.com")
         self.assertNotIn("ERROR page", o)
 

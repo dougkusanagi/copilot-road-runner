@@ -97,6 +97,8 @@ Config em `config.json` → seções `ui` e `stt` (modelo `tiny|base|small`,
   o loop; ESC puro não aborta (o agente pode usar `press_key esc`).
   Testes de desenvolvimento (cliques descartáveis) vão no Sandbox.
 - Failsafe do `pyautogui`: encoste o mouse no canto superior-esquerdo.
-- `open_app` só aceita apps da whitelist (`tools.APP_COMMANDS`); `open_url` só http(s).
+- `open_app` só aceita apps da whitelist (`tools.APP_COMMANDS`).
+  Não há teleporte p/ URL: o planner navega pela UI do navegador
+  (`ctrl+l`, digitar, `enter`, cliques), como um humano.
   Nada que o planner emite passa por shell.
 - Log de cada passo em `run.jsonl` + screenshot em `last.png`.

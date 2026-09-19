@@ -85,8 +85,10 @@ class TestPlannerPrompt(unittest.TestCase):
         self.assertIn("uia_click", sys)
 
     def test_proibe_url_profunda_inventada(self):
-        self.assertIn("NUNCA invente", planner.TOOLS_SPEC)
-        self.assertIn("NEVER jump straight to a deep", planner.PLANNER_SYSTEM)
+        blob = planner.TOOLS_SPEC + planner.PLANNER_SYSTEM
+        self.assertNotIn("open_url", blob)
+        self.assertIn("NEVER type a deep/product URL you guessed", planner.PLANNER_SYSTEM)
+        self.assertIn("like a human, through the", planner.PLANNER_SYSTEM)
 
     def test_answer_no_spec_e_no_schema(self):
         self.assertIn("answer", planner.TOOLS_SPEC)

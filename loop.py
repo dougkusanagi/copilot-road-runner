@@ -108,7 +108,7 @@ def _app_bootstrap(instruction: str, step: int, active_lower: str) -> Action | N
         else "calc.exe" if _has_any(low, CALC_WORDS) \
         else None
     if want is None:
-        return None  # browser e resto: planner resolve (open_url/focus/visual)
+        return None  # browser e resto: planner resolve (focus/visual)
     app_word = "notepad" if want == "notepad.exe" else "calcul"
     if app_word in active_lower:
         return None  # janela certa já ativa: mão p/ os modelos
@@ -171,14 +171,10 @@ def _resolve_uia(items: list[dict], target: str, wrect: tuple | None,
 
 def _planner_to_action(dec: PlannerDecision) -> Action | None:
     """Mapeia decisão nativa do planner -> Action. uia_click/visual voltam None
-    (resolvidos à parte). ValueError das tools (whitelist/URL) sobe ao chamador."""
+    (resolvidos à parte). ValueError da whitelist sobe ao chamador."""
     t = dec.type
     if t == "open_app":
         return Action(type="open", target=dec.app or "")
-    if t == "open_url":
-        from tools import open_url
-
-        return open_url(dec.url or "")
     if t == "focus_window":
         return Action(type="focus", target=dec.target or "")
     if t == "type_text":
@@ -198,7 +194,7 @@ def _planner_to_action(dec: PlannerDecision) -> Action | None:
 
 def _short(dec: PlannerDecision) -> str:
     t = dec.type
-    arg = (dec.app or dec.url or dec.target or dec.text or dec.key
+    arg = (dec.app or dec.target or dec.text or dec.key
            or dec.keys or dec.instruction or "")
     if len(arg) > 42:
         arg = arg[:42] + "..."
@@ -256,7 +252,7 @@ def _decide_planner(instruction: str, step: int, ctx: dict, cfg: dict,
 
     try:
         native = _planner_to_action(dec)
-    except ValueError as e:  # whitelist de app / URL inválida
+    except ValueError as e:  # app fora da whitelist
         raise RuntimeError(str(e))
     if native is not None:
         return Decision(action=native, source="planner", confidence=0.9,

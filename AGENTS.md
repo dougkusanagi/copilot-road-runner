@@ -26,8 +26,9 @@
 - Guard-rails determinísticos declarados (`loop.py`): bootstrap da janela do
   app ANTES do planner; anti-janela-errada e anti-repetição viram
   `last_error` p/ o planner; retries (`MAX_RETRIES=3`) NÃO consomem
-  `max_steps`. `open_app` = whitelist (`tools.APP_COMMANDS`), `open_url` só
-  http(s), nada passa por shell.
+  `max_steps`. `open_app` = whitelist (`tools.APP_COMMANDS`), nada passa por
+  shell. Sem teleporte p/ URL (`open_url` removido): navegar é pela UI do
+  navegador (ctrl+l, digitar, enter, cliques), como um humano.
 - Revisão completa + roadmap: `docs/revisao-codebase-2026-09-18.md`.
 - **UI opcional** (`main.py --ui`, extra `ui`: `uv sync --extra ui`): `app.py`
   = tray (pystray, thread daemon) + janela Spotlight (pywebview/WebView2,

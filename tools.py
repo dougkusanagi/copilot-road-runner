@@ -3,32 +3,24 @@ from __future__ import annotations
 
 import time
 
-from schemas import Action
-
 # Whitelist: o alvo vem do PLANNER (que lê texto de tela) e por isso nunca
 # passa por shell. Fora daqui = erro honesto (vira last_error p/ o modelo).
+# Não há "teleporte p/ URL": navegar é pela UI do navegador (ctrl+l, digitar,
+# enter, cliques), como um humano — por isso open_url foi removido.
 APP_COMMANDS = {
     "msedge": "msedge", "edge": "msedge", "microsoft edge": "msedge",
     "chrome": "chrome", "brave": "brave",
     "notepad": "notepad", "notepad.exe": "notepad", "bloco de notas": "notepad",
     "calc": "calc", "calc.exe": "calc", "calculator": "calc", "calculadora": "calc",
 }
-_URL_PREFIX = "url:"
 
 
 def open_app(target: str) -> str:
     """Abre app da whitelist via ShellExecute (App Paths resolve msedge etc.).
 
-    `url:https://...` (gerado por open_url) abre no navegador padrão.
-    Nunca usa shell=True: sem injeção via `&`, `"` ou `%`.
+    Equivale a clicar no ícone/Menu Iniciar: a partir daqui tudo é UI
+    (teclado/mouse/tela). Nunca usa shell=True: sem injeção via `&`, `"` ou `%`.
     """
-    import os
-
-    if target.startswith(_URL_PREFIX):
-        url = target[len(_URL_PREFIX):]
-        os.startfile(url)
-        time.sleep(1.2)
-        return f"opened {url}"
     key = target.strip().lower()
     exe = APP_COMMANDS.get(key)
     if exe is None:
@@ -48,17 +40,6 @@ def _launch(exe: str) -> None:
         os.startfile(exe)
     except OSError:
         subprocess.Popen([exe], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-
-def open_url(url: str) -> Action:
-    """Abre URL http(s) no navegador padrão. Recusa outros esquemas."""
-    from urllib.parse import urlparse
-
-    u = (url or "").strip()
-    p = urlparse(u)
-    if p.scheme not in ("http", "https") or not p.netloc or any(c in u for c in ' "\n'):
-        raise ValueError(f"URL inválida p/ open_url: {url!r} (só http/https)")
-    return Action(type="open", target=f"{_URL_PREFIX}{u}")
 
 
 def focus_window(title_substr: str, timeout: float = 3.0) -> bool:
