@@ -90,17 +90,23 @@ if ($PSCmdlet.ShouldProcess($Wsb, "Abrir Windows Sandbox via wsb.exe")) {
     Start-Process -FilePath "wsb.exe" -ArgumentList @(
         "connect", "--id", $sandboxId) | Out-Null
 
-    $bootstrap = "cmd.exe /d /c start `"`" powershell.exe -NoProfile " +
+    # SEM titulo vazio no start (mesmo motivo do invoker: wsb exec engole
+    # as aspas e o filho morre em silencio).
+    $bootstrap = "cmd.exe /d /c start powershell.exe -NoProfile " +
         "-ExecutionPolicy Bypass -NoExit -File C:\crr\sandbox\bootstrap.ps1"
     $deadline = (Get-Date).AddSeconds(90)
     $dispatched = $false
     do {
         Start-Sleep -Seconds 2
-        $raw = wsb exec --id $sandboxId --command $bootstrap `
-            --run-as ExistingLogin --raw 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            $result = $raw | ConvertFrom-Json
-            $dispatched = ($result.ExitCode -eq 0)
+        try {
+            $raw = wsb exec --id $sandboxId --command $bootstrap `
+                --run-as ExistingLogin --raw 2>$null
+            if ($LASTEXITCODE -eq 0 -and $raw) {
+                $result = $raw | ConvertFrom-Json
+                $dispatched = ($result -and $result.ExitCode -eq 0)
+            }
+        } catch {
+            $dispatched = $false
         }
     } while (-not $dispatched -and (Get-Date) -lt $deadline)
     if (-not $dispatched) {

@@ -147,7 +147,7 @@ class TestSandboxAgent(unittest.TestCase):
                        "exitcode.txt", "stdout.log", "stderr.log",
                        "TimeoutSec", "-Bootstrap", "-KeepOpen", "-NoThrow",
                        "wsb start", '"connect"', "wsb exec", "wsb stop",
-                       "ExistingLogin",
+                       "ExistingLogin", "/d /c start powershell.exe",
                        "crr-agent.local.wsb",
                        "MappedFolder", "agent.ps1"):
             self.assertIn(needle, src, f"trecho ausente: {needle}")

@@ -66,6 +66,12 @@ cada abertura é um ambiente limpo descartável.
   `wsb start/connect/exec -r ExistingLogin/stop`. Smoke test do ciclo
   completo passou. Só um Sandbox por vez; os scripts recusam iniciar se
   já houver uma instância, e encerram pelo ID apenas a que criaram.
+- `wsb exec` não retorna stdout (só `{"ExitCode": 0}`) → observabilidade
+  do agente é por arquivos em `C:\job\out`. E `cmd /c start "" ...` com
+  título vazio morre em silêncio sob `wsb exec` (ExitCode 0, nenhum
+  marker): o dispatch usa `start` SEM título vazio (provado T1-T5 em
+  18/09: mapping ok, ps direto ok, agent foreground ok, detach sem
+  título ok).
 - Timeouts das ferramentas em ms; trial no Sandbox leva ~1 min
   (sem `-Bootstrap`).
 

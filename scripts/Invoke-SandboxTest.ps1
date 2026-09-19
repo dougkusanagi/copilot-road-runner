@@ -124,22 +124,31 @@ try {
         Start-Process -FilePath "wsb.exe" -ArgumentList @(
             "connect", "--id", $sandboxId) | Out-Null
 
-        $agent = "cmd.exe /d /c start `"`" powershell.exe -NoProfile " +
+        # SEM titulo vazio ("start \"\""): o wsb exec engole as aspas e o
+        # start interpreta o exe como titulo -> filho morre em silencio
+        # (ExitCode 0, nenhum marker). Caminhos sem espaco dispensam o titulo.
+        $agent = "cmd.exe /d /c start powershell.exe -NoProfile " +
             "-ExecutionPolicy Bypass -File C:\crr\sandbox\agent.ps1 " +
             "-JobDir C:\job"
         if ($Bootstrap) { $agent += " -Bootstrap" }
 
         # ExistingLogin so pyautogui/UIA enxerguem o desktop interativo.
         # A sessao pode levar alguns segundos para ficar pronta apos connect.
+        # try/catch: com $ErrorActionPreference='Stop' o wsb.exe falhando
+        # abortaria o retry em vez de tentar de novo.
         $execDeadline = (Get-Date).AddSeconds(90)
         $dispatched = $false
         do {
             Start-Sleep -Seconds 2
-            $raw = wsb exec --id $sandboxId --command $agent `
-                --run-as ExistingLogin --raw 2>$null
-            if ($LASTEXITCODE -eq 0) {
-                $result = $raw | ConvertFrom-Json
-                $dispatched = ($result.ExitCode -eq 0)
+            try {
+                $raw = wsb exec --id $sandboxId --command $agent `
+                    --run-as ExistingLogin --raw 2>$null
+                if ($LASTEXITCODE -eq 0 -and $raw) {
+                    $result = $raw | ConvertFrom-Json
+                    $dispatched = ($result -and $result.ExitCode -eq 0)
+                }
+            } catch {
+                $dispatched = $false
             }
         } while (-not $dispatched -and (Get-Date) -lt $execDeadline)
         if (-not $dispatched) {
