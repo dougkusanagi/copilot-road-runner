@@ -126,6 +126,58 @@ class TestEnsureServers(unittest.TestCase):
         self.assertEqual(killed, ["vision"])
 
 
+class TestWaitAlive(unittest.TestCase):
+    class FakeProc:
+        def __init__(self, rc=None):
+            self._rc = rc
+            self.killed = False
+
+        def poll(self):
+            return self._rc
+
+        def kill(self):
+            self.killed = True
+
+    def test_responde_na_terceira_tentativa_sem_matar(self):
+        proc = self.FakeProc(rc=None)
+        calls = {"n": 0}
+
+        def fake_alive(base_url, timeout_s=5.0):
+            calls["n"] += 1
+            return {"models": ["m"]} if calls["n"] >= 3 else None
+
+        with patch.object(server, "_endpoint_alive", side_effect=fake_alive):
+            alive = server._wait_alive("planner", "http://x/v1", proc,
+                                       Path("f.log"), timeout_s=60, poll_s=0.01,
+                                       progress=lambda *a: None)
+        self.assertEqual(alive, {"models": ["m"]})
+        self.assertEqual(calls["n"], 3)
+        self.assertFalse(proc.killed)
+
+    def test_saida_precoce_mostra_causa_sem_matar(self):
+        proc = self.FakeProc(rc=1)
+        with patch.object(server, "_endpoint_alive", return_value=None), \
+             patch.object(server, "_tail", return_value="GGUF corrompido"):
+            with self.assertRaises(RuntimeError) as cm:
+                server._wait_alive("planner", "http://x/v1", proc,
+                                   Path("f.log"), timeout_s=60, poll_s=0.01,
+                                   progress=lambda *a: None)
+        self.assertIn("saiu cedo", str(cm.exception))
+        self.assertIn("GGUF corrompido", str(cm.exception))
+        self.assertFalse(proc.killed)  # já morto: nada a matar
+
+    def test_timeout_mata_e_diz_o_deadline(self):
+        proc = self.FakeProc(rc=None)
+        with patch.object(server, "_endpoint_alive", return_value=None):
+            with self.assertRaises(RuntimeError) as cm:
+                server._wait_alive("vision", "http://x/v1", proc,
+                                   Path("f.log"), timeout_s=0.05, poll_s=0.01,
+                                   progress=lambda *a: None)
+        self.assertIn("não respondeu", str(cm.exception))
+        self.assertIn("startup_timeout_s", str(cm.exception))
+        self.assertTrue(proc.killed)
+
+
 class TestLoopEnsureLocal(unittest.TestCase):
     URLS = ("http://127.0.0.1:8091/v1", "http://127.0.0.1:8082/v1")
 

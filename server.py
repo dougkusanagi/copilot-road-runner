@@ -66,6 +66,10 @@ LLAMA_EXE = BIN_DIR / "llama-server.exe"
 DEFAULT_NGL = 0
 DEFAULT_THREADS = max(2, (os.cpu_count() or 4) // 2)
 DEFAULT_CTX = 4096
+# Carga do GGUF (657 MB) com Defender/HDD pode levar minutos: _spawn_one faz
+# polling até esse deadline em vez de uma única tentativa (que matava o
+# servidor saudável ainda em `loading model` com um falso "não respondeu").
+DEFAULT_STARTUP_TIMEOUT_S = 600.0
 
 
 def _split_host_port(base_url: str) -> tuple[str, int]:
@@ -210,6 +214,56 @@ def _server_args(role: str, gguf: Path, mmproj: Path | None, port: int,
     return args
 
 
+def _tail(log: Path, chars: int = 2000) -> str:
+    """Últimas linhas não-vazias do log (diagnóstico de startup)."""
+    try:
+        lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
+        return "\n".join(ln for ln in lines if ln.strip())[-chars:]
+    except Exception:
+        return ""
+
+
+def _wait_alive(role: str, base_url: str, proc: subprocess.Popen,
+                log: Path, timeout_s: float = 600.0, poll_s: float = 2.0,
+                progress=print) -> dict:
+    """Poll `/v1/models` até o llama-server responder (puro, testável).
+
+    O binário só escuta DEPOIS de carregar o GGUF (657 MB + Defender/HDD
+    = minutos); uma única tentativa com timeout longo falha rápido em
+    'connection refused' e matava o processo saudável. Aqui: deadline real,
+    saída precoce detectada com a causa (tail do log), e nota de progresso
+    a cada 30 s com a última linha do log.
+    """
+    deadline = time.monotonic() + max(1.0, timeout_s)
+    last_note = 0.0
+    while True:
+        rc = proc.poll()
+        if rc is not None:
+            raise RuntimeError(
+                f"llama-server ({role}) saiu cedo (code {rc}). "
+                f"log: {log}\n{_tail(log)}")
+        alive = _endpoint_alive(base_url, timeout_s=5.0)
+        if alive:
+            return alive
+        now = time.monotonic()
+        if now >= deadline:
+            break
+        if now - last_note >= 30.0:
+            last_note = now
+            last = _tail(log, chars=300).splitlines()
+            progress(f"  {role}: ainda carregando... "
+                     f"({last[-1][-120:] if last else 'sem log ainda'})")
+        time.sleep(min(poll_s, max(0.1, deadline - now)))
+    try:
+        proc.kill()
+    except Exception:
+        pass
+    raise RuntimeError(
+        f"llama-server ({role}) não respondeu em {timeout_s:.0f}s. "
+        f"Causa provável: carga lenta (Defender/HDD) — aumente "
+        f"runtime.startup_timeout_s. log: {log}\n{_tail(log)}")
+
+
 def _spawn_one(role: str, base_url: str, port: int, assets: dict, cfg: dict,
                progress=print) -> subprocess.Popen:
     gguf = assets["planner_gguf" if role == "planner" else "vision_gguf"]
@@ -223,17 +277,19 @@ def _spawn_one(role: str, base_url: str, port: int, assets: dict, cfg: dict,
         f.flush()
         proc = subprocess.Popen(args, stdout=f, stderr=f,
                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    if not _endpoint_alive(base_url, timeout_s=180.0):
-        tail = ""
+    timeout_s = float(cfg.get("runtime", {}).get(
+        "startup_timeout_s", DEFAULT_STARTUP_TIMEOUT_S))
+    try:
+        alive = _wait_alive(role, base_url, proc, log, timeout_s=timeout_s,
+                            progress=progress)
+    except Exception:
         try:
-            tail = log.read_text(encoding="utf-8", errors="replace")[-500:]
+            if proc.poll() is None:
+                proc.kill()
         except Exception:
             pass
-        if proc.poll() is not None:
-            raise RuntimeError(f"llama-server ({role}) saiu cedo (code {proc.returncode}). "
-                               f"log: {log}\n{tail}")
-        proc.kill()
-        raise RuntimeError(f"llama-server ({role}) não respondeu em 180s. log: {log}\n{tail}")
+        raise
+    progress(f"{role}: no ar em {base_url} (modelos={alive['models']})")
     return proc
 
 

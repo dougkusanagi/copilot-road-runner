@@ -36,6 +36,8 @@ DEFAULTS: dict = {
         "ngl": 0,  # 0 = CPU; >0 offload p/ GPU (quem tem VRAM)
         "threads": 0,  # 0 = metade dos núcleos (server.DEFAULT_THREADS)
         "ctx": 4096,
+        # Carga do GGUF com Defender/HDD leva minutos (polling até o deadline)
+        "startup_timeout_s": 600,
     },
     # --- tray + janela Spotlight (main.py --ui; extra `ui`) ---
     "ui": {
