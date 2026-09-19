@@ -15,6 +15,23 @@ import psutil
 
 import config as cfgmod
 
+
+def _dpi_aware() -> None:
+    """GetWindowRect, mss e pyautogui na MESMA unidade (pixel físico) em DPI≠100%.
+    Precisa rodar antes de qualquer janela/import de pywinauto/pyautogui."""
+    try:
+        import ctypes
+
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)  # per-monitor
+        except Exception:
+            ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
+
+_dpi_aware()
+
 # Console Windows pode estar em cp1252: nunca quebrar por unicode (→, ç, ã...).
 for _s in (sys.stdout, sys.stderr):
     try:

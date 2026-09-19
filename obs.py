@@ -10,16 +10,25 @@ from PIL import Image
 LAST_PNG = Path("last.png")
 
 
-def take_screenshot(
-    dest: str | Path = LAST_PNG,
-    max_width: int | None = None,
-    jpeg_quality: int = 60,
-) -> tuple[str, tuple[int, int]]:
-    """Captura monitor primário, salva PNG full-res, retorna (path, (w,h))."""
-    dest = Path(dest)
+def _grab_virtual() -> tuple[Image.Image, tuple[int, int]]:
+    """Captura o DESKTOP VIRTUAL inteiro (todos os monitores).
+
+    Retorna (imagem, (left, top)): o pixel (0,0) da imagem corresponde à
+    coordenada de tela (left, top) — negativa se houver monitor à
+    esquerda/acima do primário. mss.monitors[0] é a caixa envolvente de
+    todos, não o primário.
+    """
     with mss.mss() as sct:
-        shot = sct.grab(sct.monitors[0])
+        mon = sct.monitors[0]
+        shot = sct.grab(mon)
         img = Image.frombytes("RGB", shot.size, shot.rgb)
+    return img, (int(mon["left"]), int(mon["top"]))
+
+
+def take_screenshot(dest: str | Path = LAST_PNG) -> tuple[str, tuple[int, int]]:
+    """Captura o desktop virtual, salva PNG full-res, retorna (path, (w,h))."""
+    dest = Path(dest)
+    img, _ = _grab_virtual()
     w, h = img.size
     img.save(dest)
     return str(dest), (w, h)
@@ -50,27 +59,33 @@ def capture_for_vision(
 ) -> tuple["Image.Image", tuple[int, int], tuple[int, int]]:
     """Captura SÓ quando a visão é necessária (chamar só no branch visual).
 
-    Prefere a janela ativa (crop preservando offset); senão monitor primário.
-    Retorna (PIL.Image, origin_xy, full_size). Coordenadas do Vocaela (0..1)
-    são relativas à imagem retornada → some origin_xy ao converter p/ físico.
-    Aspect ratio sempre preservado (sem stretch).
+    Prefere a janela ativa (crop preservando offset); senão o desktop
+    virtual inteiro. Retorna (PIL.Image, origin_xy, full_size), com
+    origin_xy em COORDENADAS DE TELA (pode ser negativo em multi-monitor):
+    as coordenadas do Vocaela (0..1) são relativas à imagem retornada →
+    `origin + frac * size` dá o pixel físico. Aspect ratio preservado.
     """
-    import mss as _mss
+    full, (vx, vy) = _grab_virtual()
+    return crop_to_rect(full, (vx, vy), _foreground_rect())
 
-    with _mss.mss() as sct:
-        shot = sct.grab(sct.monitors[0])
-        full = Image.frombytes("RGB", shot.size, shot.rgb)
+
+def crop_to_rect(full: Image.Image, virtual_origin: tuple[int, int],
+                 rect: tuple[int, int, int, int] | None,
+                 ) -> tuple[Image.Image, tuple[int, int], tuple[int, int]]:
+    """Recorta `rect` (coords de tela) de `full`, cujo (0,0) é `virtual_origin`.
+
+    Puro (sem GUI) p/ teste. Retorna (crop, origin_tela, full_size).
+    """
     fw, fh = full.size
-    rect = _foreground_rect()
+    vx, vy = virtual_origin
     if rect:
         l, t, rr, b = rect
-        l = max(0, l)
-        t = max(0, t)
-        rr = min(fw, rr)
-        b = min(fh, b)
-        if rr - l >= 50 and b - t >= 50:
-            return full.crop((l, t, rr, b)), (l, t), (fw, fh)
-    return full, (0, 0), (fw, fh)
+        # tela -> pixel da imagem, limitado à imagem
+        pl, pt = max(0, l - vx), max(0, t - vy)
+        pr, pb = min(fw, rr - vx), min(fh, b - vy)
+        if pr - pl >= 50 and pb - pt >= 50:
+            return full.crop((pl, pt, pr, pb)), (pl + vx, pt + vy), (fw, fh)
+    return full, (vx, vy), (fw, fh)
 
 
 if __name__ == "__main__":
