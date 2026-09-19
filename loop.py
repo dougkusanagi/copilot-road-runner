@@ -188,7 +188,7 @@ def _short(dec: PlannerDecision) -> str:
 
 
 # --- decide: fluxo principal (planner) ----------------------------------------
-def _decide_planner(instruction: str, ctx: dict, cfg: dict,
+def _decide_planner(instruction: str, step: int, ctx: dict, cfg: dict,
                     planner: MiniCPMPlanner,
                     vocaela: VocaelaAdapter) -> tuple[Decision, dict]:
     t: dict = {"planner_ms": 0.0, "uia_ms": 0.0, "screenshot_ms": 0.0,
@@ -278,7 +278,7 @@ def decide(instruction: str, step: int, ctx: dict, cfg: dict,
         raise RuntimeError(
             "arquitetura de 2 modelos exige MiniCPM5-1B (8091) e Vocaela (8082) "
             "online; sem fallback programático.")
-    return _decide_planner(instruction, ctx, cfg, planner, vocaela)
+    return _decide_planner(instruction, step, ctx, cfg, planner, vocaela)
 
 
 # --- verify: observação passiva (NUNCA decide ação nem done) -------------------
@@ -327,14 +327,14 @@ def run(instruction: str, cfg: dict) -> dict:
 
     # --- sobe os dois modelos: OBRIGATÓRIOS (decisão 100% por modelos) ---
     pc = cfg.get("planner", {})
-    planner = MiniCPMPlanner(base_url=pc.get("base_url", "http://127.0.0.1:8081/v1"),
+    planner = MiniCPMPlanner(base_url=pc.get("base_url", "http://127.0.0.1:8091/v1"),
                              model=pc.get("model", "MiniCPM5-1B"),
                              temperature=float(pc.get("temperature", 0.1)),
                              timeout_s=float(pc.get("timeout_s", 90)))
     st = planner.check()
     if not st.get("ok"):
         print(f"Planner MiniCPM5-1B OFFLINE: {st.get('error')}")
-        print("Suba o planner (llama-server em 8081) e rode de novo. "
+        print("Suba o planner (llama-server em 8091) e rode de novo. "
               "Sem fallback programático: os modelos decidem.")
         _log({"event": "no_model", "planner": str(st.get("error"))[:200]})
         safety.stop()

@@ -1,6 +1,10 @@
 # copilot-road-runner — Computer Use local MVP (Windows)
 
-Fluxo: instrução → tools determinísticas → UIA (`pywinauto`) → scorer por regras → fallback VLM (LM Studio) → `pyautogui` → observa → repete.
+Fluxo: instrução → planner MiniCPM5-1B (`:8091`, só texto, nunca recebe
+screenshot, nunca emite coordenadas) → UIA por nome (`pywinauto`) →
+Vocaela-2 (`:8082`, screenshot → ação visual 0..1, só quando o elemento
+não está na accessibility tree) → `pyautogui` → observa → repete.
+Python executa e NUNCA decide; sem modelos online = erro honesto.
 
 ## Setup
 
@@ -8,8 +12,9 @@ Fluxo: instrução → tools determinísticas → UIA (`pywinauto`) → scorer p
 uv sync
 ```
 
-Requer **LM Studio** rodando com um modelo **vision** carregado (ex: `qwen2-vl`, `llava-1.6`)
-para o fallback VLM. Sem ele, use `--no-vlm` (só determinístico + UIA).
+Requer dois `llama-server` ouvindo na rede (`--host 0.0.0.0`):
+planner MiniCPM5-1B em `:8091` + visão Vocaela-2 em `:8082`.
+Detalhes do ambiente isolado em `docs/sandbox-test-env.md`.
 
 ## Uso
 
@@ -17,17 +22,15 @@ para o fallback VLM. Sem ele, use `--no-vlm` (só determinístico + UIA).
 # teste sem clicar em nada
 uv run python main.py --self-test
 
-# checar LM Studio
-uv run python vlm.py
+# suite oficial (sempre via uv)
+uv run python -m unittest discover -s tests
 
-# listar elementos UIA visíveis
-uv run python uia.py
+# dry-run do grounding Vocaela (screenshot → ação, sem clicar)
+uv run python main.py --locate "Click the address bar"
 
-# demo browser + busca (end-to-end)
-uv run python main.py "abra o Edge e busque preço RTX 4060" --max-steps 8
-
-# sem VLM (só bootstrap determinístico + UIA)
-uv run python main.py "abra o Edge e busque preço RTX 4060" --no-vlm --max-steps 4
+# end-to-end (comece com --max-steps 4; nunca no host enquanto usa o PC — use o Sandbox)
+uv run python main.py "abra o Edge e busque preço RTX 4060" --max-steps 4
+uv run python main.py "..." --config config.sandbox.json --max-steps 4
 ```
 
 ## Segurança
