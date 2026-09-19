@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Agente de testes DENTRO do Windows Sandbox (via LogonCommand do .wsb).
+    Agente de testes DENTRO do Windows Sandbox (disparado por wsb exec).
 
 .DESCRIPTION
     Protocolo por pasta mapeada (C:\job <-> host\.sandbox-job\<id>):
@@ -10,6 +10,7 @@
          exitcode.txt + done.marker (sinal lido pelo host).
 
     Exit 124 = job estourou o timeout e foi morto.
+    Exit 125 = bootstrap falhou (done.marker e gravado mesmo assim).
 #>
 param(
     [string]$JobDir = "C:\job",
@@ -23,13 +24,26 @@ $ErrorActionPreference = "Stop"
 $InDir = Join-Path $JobDir "in"
 $OutDir = Join-Path $JobDir "out"
 New-Item -ItemType Directory -Force -Path $InDir, $OutDir | Out-Null
-# Heartbeat: prova que o LogonCommand rodou (host diagnostica por ele).
+# Heartbeat: prova que o wsb exec iniciou o agente (host diagnostica por ele).
 "started $(Get-Date -Format o)" |
     Set-Content -LiteralPath (Join-Path $OutDir "started.marker")
 
+$stdout = Join-Path $OutDir "stdout.log"
+$stderr = Join-Path $OutDir "stderr.log"
+$codeFile = Join-Path $OutDir "exitcode.txt"
+$done = Join-Path $OutDir "done.marker"
+
 if ($Bootstrap) {
     Write-Host "[agent] bootstrap (Python+uv+config)..."
-    & (Join-Path $PSScriptRoot "bootstrap.ps1")
+    try {
+        & (Join-Path $PSScriptRoot "bootstrap.ps1")
+    } catch {
+        # Sem isto o host so veria "timeout" sem causa.
+        "bootstrap falhou: $($_ | Out-String)" | Set-Content -LiteralPath $stderr
+        "125" | Set-Content -LiteralPath $codeFile
+        "done $(Get-Date -Format o)" | Set-Content -LiteralPath $done
+        exit 125
+    }
 }
 
 $cmd = Join-Path $InDir "command.ps1"
@@ -41,11 +55,6 @@ while (-not (Test-Path -LiteralPath $cmd)) {
     Start-Sleep -Seconds 2
     $waited += 2
 }
-
-$stdout = Join-Path $OutDir "stdout.log"
-$stderr = Join-Path $OutDir "stderr.log"
-$codeFile = Join-Path $OutDir "exitcode.txt"
-$done = Join-Path $OutDir "done.marker"
 
 # Wrapper: o exit code vem de $LASTEXITCODE dentro do processo
 # (Process.ExitCode via Start-Process nao e confiavel p/ powershell).

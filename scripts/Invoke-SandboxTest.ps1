@@ -57,6 +57,17 @@ if ($alreadyRunning.Count -gt 0) {
     throw "sandbox: ja existe uma instancia ativa; feche-a antes do teste."
 }
 
+if ($OpenModelPorts) {
+    $elevated = ([Security.Principal.WindowsPrincipal] `
+        [Security.Principal.WindowsIdentity]::GetCurrent() `
+        ).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
+    if (-not $elevated) {
+        # Antes de criar o job: sem isto ficava uma pasta orfa em .sandbox-job.
+        Write-Warning "-OpenModelPorts precisa de terminal como admin."
+        return
+    }
+}
+
 $Repo = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 $JobRoot = Join-Path $Repo ".sandbox-job"
 $JobId = Get-Date -Format "yyyyMMdd-HHmmss"
@@ -95,13 +106,6 @@ if ($PSCmdlet.ShouldProcess($Wsb, "Gerar .wsb do agente")) {
 }
 
 if ($OpenModelPorts) {
-    $elevated = ([Security.Principal.WindowsPrincipal] `
-        [Security.Principal.WindowsIdentity]::GetCurrent() `
-        ).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
-    if (-not $elevated) {
-        Write-Warning "-OpenModelPorts precisa de terminal como admin."
-        return
-    }
     foreach ($port in @(8091, 8082)) {
         $rule = "crr-model-{0}" -f $port
         if (Get-NetFirewallRule -DisplayName $rule -ErrorAction SilentlyContinue) {
@@ -118,6 +122,7 @@ $done = Join-Path $OutDir "done.marker"
 $sandboxId = $null
 try {
     if ($PSCmdlet.ShouldProcess($Wsb, "Abrir Windows Sandbox p/ job $JobId")) {
+        # --config aceita o XML inline; o .wsb gravado acima e so p/ inspecao.
         $started = wsb start --config $xml --raw | ConvertFrom-Json
         $sandboxId = $started.Id
         if (-not $sandboxId) { throw "sandbox: wsb start nao devolveu um ID." }
@@ -130,6 +135,8 @@ try {
         $agent = "cmd.exe /d /c start powershell.exe -NoProfile " +
             "-ExecutionPolicy Bypass -File C:\crr\sandbox\agent.ps1 " +
             "-JobDir C:\job"
+        # O job morre (exit 124) ANTES do host desistir: resultado parcial legivel.
+        $agent += " -JobTimeoutSec $([Math]::Max(60, $TimeoutSec - 30))"
         if ($Bootstrap) { $agent += " -Bootstrap" }
 
         # ExistingLogin so pyautogui/UIA enxerguem o desktop interativo.

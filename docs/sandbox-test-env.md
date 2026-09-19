@@ -88,7 +88,7 @@ Protocolo (`.sandbox-job\<id>\` ↔ `C:\job`):
 |---|---|---|
 | host → sandbox | `in\command.ps1` | comando a executar |
 | sandbox → host | `out\stdout.log` / `out\stderr.log` | saída capturada |
-| sandbox → host | `out\exitcode.txt` | `0` = ok; `124` = timeout do job (via `$LASTEXITCODE` no wrapper) |
+| sandbox → host | `out\exitcode.txt` | `0` = ok; `124` = timeout do job (via `$LASTEXITCODE` no wrapper); `125` = `bootstrap.ps1` falhou (causa em `stderr.log`) |
 | sandbox → host | `out\done.marker` | sinal de conclusão (host faz poll até `-TimeoutSec`) |
 | sandbox → host | `out\started.marker` | heartbeat: prova que o `wsb exec` iniciou o agente |
 
@@ -105,6 +105,7 @@ Protocolo (`.sandbox-job\<id>\` ↔ `C:\job`):
 |---|---|
 | Sandbox não alcança `:8091`/`:8082` | `llama-server` preso em `127.0.0.1` → subir com `--host 0.0.0.0`; rodar com `-OpenModelPorts` em terminal admin |
 | `HOST_IP` não resolvido | `bootstrap.ps1` não achou o gateway → rode `Get-NetRoute -DestinationPrefix "0.0.0.0/0"` no Sandbox e edite `config.sandbox.json` à mão |
+| `.venv` do host "trocou de Python" após um Sandbox | regressão antiga: `uv sync` em `C:\crr` escrevia no `.venv` mapeado. Hoje o bootstrap usa `UV_PROJECT_ENVIRONMENT=%LOCALAPPDATA%\crr-venv` (+ `UV_CACHE_DIR`); se voltar, confira essas variáveis no Sandbox |
 | winget lento na primeira abertura | normal: Python+uv instalam a cada boot (Sandbox não tem snapshot); deixe o `bootstrap.ps1` terminar |
 | job do agente sem resposta | `Invoke-SandboxTest.ps1` estourou `-TimeoutSec` → aumente o timeout; com `-KeepOpen`, abra o Sandbox e leia `C:\job\out\` |
 | job sem nem `started.marker` | `wsb exec` não iniciou o agente ou ele falhou antes do heartbeat; confira o erro do invoker e `C:\job\out\` |

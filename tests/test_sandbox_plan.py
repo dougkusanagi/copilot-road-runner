@@ -114,8 +114,12 @@ class TestSandboxScripts(unittest.TestCase):
         for needle in ("winget", "Python.Python.3.12", "astral-sh.uv",
                        "uv sync", "Get-NetRoute", "HOST_IP",
                        "config.sandbox.example.json", "config.sandbox.json",
-                       "--self-test", "--max-steps 4"):
+                       "--self-test", "--max-steps 4",
+                       "UV_PROJECT_ENVIRONMENT", "UV_CACHE_DIR"):
             self.assertIn(needle, src, f"trecho ausente: {needle}")
+        # venv fora do repo mapeado: um `uv sync` em C:\crr sobrescreveria
+        # o .venv do host. LogonCommand nao dispara (AGENTS.md) -> nem citar.
+        self.assertNotIn("LogonCommand", src)
 
     def test_powershell_parse_sem_executar(self):
         """Parser oficial do PS: erro de sintaxe falha aqui, sem Sandbox."""
@@ -148,7 +152,7 @@ class TestSandboxAgent(unittest.TestCase):
                        "TimeoutSec", "-Bootstrap", "-KeepOpen", "-NoThrow",
                        "wsb start", '"connect"', "wsb exec", "wsb stop",
                        "ExistingLogin", "/d /c start powershell.exe",
-                       "crr-agent.local.wsb",
+                       "crr-agent.local.wsb", "-JobTimeoutSec",
                        "MappedFolder", "agent.ps1"):
             self.assertIn(needle, src, f"trecho ausente: {needle}")
 
@@ -170,8 +174,11 @@ class TestSandboxAgent(unittest.TestCase):
                        "exitcode.txt", "stdout.log", "stderr.log",
                        "-Bootstrap", "bootstrap.ps1", "HasExited", "124",
                        "LASTEXITCODE", "run-wrapper", "ErrorActionPreference",
-                       "PollTimeoutSec", "JobTimeoutSec"):
+                       "PollTimeoutSec", "JobTimeoutSec", "125"):
             self.assertIn(needle, src, f"trecho ausente: {needle}")
+        self.assertNotIn("LogonCommand", src)
+        # bootstrap falhando ainda grava done.marker (host nao ve so timeout)
+        self.assertIn("catch", src.rsplit("bootstrap.ps1", 1)[1][:400])
 
     def test_docs_cobre_agente(self):
         doc = DOC.read_text(encoding="utf-8")
