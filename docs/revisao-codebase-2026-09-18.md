@@ -449,10 +449,16 @@ direção — o `ParseFile` do PowerShell e o `_render_wsb` → XML são o model
 > **Status (18/09, mesmo dia):** P0 C1–C7 e P1 C8–C15 implementados e commitados
 > (`5f55188`, `f0e843d`, `0b2b2b8`, `b09424f`) — 77 testes, `ruff` limpo, CI Windows.
 > Também feitos: §5.2 (`verify` → `observe()` no histórico do planner, `focused_value`),
-> §5.3 (`done` exige ação executada — guard 4), §10 (tray + Spotlight + ditado, `e35187f`).
-> Pendentes: §5.4 (`json_schema`), §5.5 (contexto `tipo:nome`), §6.2 (run dir/dry-run),
-> §6.3 (README com comandos dos `llama-server`, LICENSE — escolha do autor), §7 (harness),
-> §4.2/4.4/4.5 (invoker `-Reuse`/`-Prune`, cache por boot).
+> §5.3 (`done` exige ação executada — guard 4), §10 (tray + Spotlight + ditado, `e35187f`),
+> runtime próprio (`server.py`: baixa llama.cpp + GGUFs e sobe `:8091`/`:8082`,
+> reuso por porta, `--no-runtime`).
+> Feitos em 19/09: §5.4 (`response_format: json_schema` no planner + retry/backoff,
+> coordenadas recusadas no `model_validator`), §5.5 (contexto `tipo:nome` com
+> interativos primeiro + histórico de ações p/ o Vocaela), §6.3 parcial (README
+> com comandos manuais dos dois `llama-server`).
+> Pendentes: §6.2 (run dir/dry-run), §6.3 resto (LICENSE — escolha do autor),
+> §7 (harness), §4.2/4.4/4.5 (invoker `-Reuse`/`-Prune`, cache por boot),
+> P3 (`Config` pydantic, `httpx.Client` reutilizado, timeouts menores).
 
 | Prioridade | Item | Esforço | Seção |
 |---|---|---|---|

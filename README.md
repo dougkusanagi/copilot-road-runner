@@ -15,9 +15,36 @@ uv sync            # Python 3.12 (.python-version)
 uv run ruff check  # lint (dev-deps)
 ```
 
-Requer dois `llama-server` ouvindo na rede (`--host 0.0.0.0`):
-planner MiniCPM5-1B em `:8091` + visão Vocaela-2 em `:8082`.
+Runtime próprio: na 1ª execução o loop baixa o `llama-server` (llama.cpp
+Windows x64 CPU) + os GGUFs (MiniCPM5-1B-Q4_K_M ~657 MB,
+Vocaela-2-Q8_0 + mmproj ~534 MB) para `models/` (gitignored) e sobe
+planner em `:8091` + visão em `:8082`. Nas seguintes, só reusa.
+Endpoint já vivo na porta é reaproveitado (não importa quem subiu);
+porta ocupada sem endpoint = erro honesto. Desligue com
+`runtime.auto_start: false` ou `--no-runtime`; `uv run python -m server`
+sobe os dois e fica no ar (`--host 0.0.0.0` expõe ao Sandbox).
 Detalhes do ambiente isolado em `docs/sandbox-test-env.md`.
+
+## Modelos (manual)
+
+Normalmente você não precisa disso (`main.py` baixa e sobe sozinho).
+Para subir na mão ou expor ao Sandbox:
+
+```powershell
+# planner MiniCPM5-1B em :8091 (--jinja: template oficial do MiniCPM5)
+.\models\bin\llama-server.exe -m .\models\MiniCPM5-1B-Q4_K_M.gguf `
+  --host 127.0.0.1 --port 8091 -c 4096 --jinja
+
+# visão Vocaela-2 em :8082 (--mmproj obrigatório p/ imagem)
+.\models\bin\llama-server.exe -m .\models\Vocaela-2-500M-1024R2-Q8_0.gguf `
+  --mmproj .\models\mmproj-Vocaela-2-500M-1024R2-Q8_0.gguf `
+  --host 127.0.0.1 --port 8082 -c 4096
+
+# ou os dois de uma vez (fica no ar até Ctrl+C):
+uv run python -m server
+# p/ o Sandbox enxergar o host: --host 0.0.0.0 (+ config.sandbox.json → HOST_IP)
+uv run python -m server --host 0.0.0.0
+```
 
 ## Uso
 

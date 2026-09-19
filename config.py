@@ -29,6 +29,14 @@ DEFAULTS: dict = {
     "screenshot_max_width": 1024,  # Vocaela-2-1024R2: treino em longest-edge 1024
     "verify_wait_ms": 500,
     "stop_hotkey": "ctrl+alt+esc",
+    # --- runtime próprio dos modelos (server.py: baixa e sobe llama-server) ---
+    "runtime": {
+        "auto_start": True,  # endpoints locais caídos -> baixa GGUFs e sobe
+        "host": "127.0.0.1",  # bind dos llama-server (0.0.0.0 p/ expor ao Sandbox)
+        "ngl": 0,  # 0 = CPU; >0 offload p/ GPU (quem tem VRAM)
+        "threads": 0,  # 0 = metade dos núcleos (server.DEFAULT_THREADS)
+        "ctx": 4096,
+    },
     # --- tray + janela Spotlight (main.py --ui; extra `ui`) ---
     "ui": {
         "hotkey": "ctrl+alt+space",  # mostra/esconde a janela

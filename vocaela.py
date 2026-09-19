@@ -243,22 +243,33 @@ class VocaelaAdapter:
             return {"ok": False, "error": str(e)}
 
     async def act(self, screenshot: Image.Image | str,
-                  instruction: str) -> tuple[VisualAction, float]:
-        return await asyncio.to_thread(self.act_sync, screenshot, instruction)
+                  instruction: str,
+                  history: list[str] | None = None) -> tuple[VisualAction, float]:
+        return await asyncio.to_thread(self.act_sync, screenshot, instruction, history)
 
     def act_sync(self, screenshot: Image.Image | str,
-                 instruction: str) -> tuple[VisualAction, float]:
-        """Retorna (VisualAction, vision_ms)."""
+                 instruction: str,
+                 history: list[str] | None = None) -> tuple[VisualAction, float]:
+        """Retorna (VisualAction, vision_ms).
+
+        `history`: últimas ações visuais como texto (o system oficial fala em
+        "action history sequence", que o adapter não enviava — §5.5).
+        """
         if isinstance(screenshot, Image.Image):
             b64, _ = _prep_image(screenshot, self.max_long_edge)
         else:
             b64 = str(screenshot)
+        user_text = instruction
+        if history:
+            seq = "\n".join(f"- {h[:120]}" for h in history[-3:])
+            user_text = (f"Action history sequence:\n{seq}\n"
+                         f"Current instruction: {instruction}")
         payload = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": VOCAELA_COMPUTER_SYSTEM},
                 {"role": "user", "content": [
-                    {"type": "text", "text": instruction},
+                    {"type": "text", "text": user_text},
                     {"type": "image_url",
                      "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
                 ]},
@@ -267,10 +278,25 @@ class VocaelaAdapter:
             "max_tokens": 128,
         }
         t0 = time.perf_counter()
-        with httpx.Client(timeout=self.timeout_s) as c:
-            r = c.post(f"{self.base_url}/chat/completions", json=payload)
-            r.raise_for_status()
-            data = r.json()
+        data: dict | None = None
+        last_err: Exception | None = None
+        for attempt in range(3):  # §5.6: retry curto p/ slot ocupado/timeout
+            try:
+                with httpx.Client(timeout=self.timeout_s) as c:
+                    r = c.post(f"{self.base_url}/chat/completions", json=payload)
+                    r.raise_for_status()
+                    data = r.json()
+                break
+            except Exception as e:
+                last_err = e
+                retryable = isinstance(e, httpx.TimeoutException) or (
+                    isinstance(e, httpx.HTTPStatusError)
+                    and e.response is not None and e.response.status_code >= 500)
+                if not retryable or attempt == 2:
+                    break
+                time.sleep(0.5 * (attempt + 1))
+        if data is None:
+            raise RuntimeError(f"vocaela HTTP falhou: {last_err}")
         ms = (time.perf_counter() - t0) * 1000
         content = data["choices"][0]["message"]["content"]
         return parse_vocaela_output(content), ms

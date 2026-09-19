@@ -287,5 +287,78 @@ class TestResolveUia(unittest.TestCase):
         self.assertIsNone(_resolve_uia(self.ITEMS, "Sete", (500, 500, 900, 900)))
 
 
+class TestPlannerSchema(unittest.TestCase):
+    def test_response_format_no_payload(self):
+        srv, seen = _make_server('{"type": "done"}')
+        try:
+            base = f"http://127.0.0.1:{srv.server_port}/v1"
+            pl = planner.MiniCPMPlanner(base_url=base)
+            dec, _ = pl.next_action("g", "w", ["a"], [])
+            self.assertEqual(dec.type, "done")
+            rf = seen[0].get("response_format", {})
+            self.assertEqual(rf.get("type"), "json_schema")
+            schema = rf["json_schema"]["schema"]
+            self.assertIn("done", schema["properties"]["type"]["enum"])
+            self.assertFalse(schema.get("additionalProperties", True))
+            self.assertNotIn("x", schema["properties"])
+            self.assertNotIn("y", schema["properties"])
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_model_validate_recusa_coords(self):
+        with self.assertRaises(Exception):
+            planner.PlannerDecision.model_validate(
+                {"type": "uia_click", "target": "7", "x": 10, "y": 20})
+
+
+class TestFormatUiNames(unittest.TestCase):
+    def test_tipo_nome_e_interativos_primeiro(self):
+        from loop import format_ui_names
+
+        items = [
+            {"name": "texto corrido", "type": "Text", "bounds": [0, 0, 10, 10]},
+            {"name": "7", "type": "Button", "bounds": [0, 0, 10, 10]},
+            {"name": "Pesquisar", "type": "Edit", "bounds": [0, 0, 10, 10]},
+            {"name": "", "type": "Button", "bounds": [0, 0, 10, 10]},
+        ]
+        names = format_ui_names(items)
+        self.assertEqual(names[0], "Button:7")
+        self.assertEqual(names[1], "Edit:Pesquisar")
+        self.assertTrue(names[-1].startswith("Text:"))
+        self.assertEqual(len(names), 3)
+
+
+class TestVocaelaHistory(unittest.TestCase):
+    def test_historico_vai_no_prompt(self):
+        reply = '<Action>[{"action": "CLICK", "coordinate": [0.5, 0.25]}]</Action>'
+        srv, seen = _make_server(reply)
+        try:
+            base = f"http://127.0.0.1:{srv.server_port}/v1"
+            ad = vocaela.VocaelaAdapter(base_url=base)
+            va, _ = ad.act_sync(Image.new("RGB", (50, 50), "white"),
+                                "Click X", history=["visual a -> click", "type oi"])
+            self.assertEqual(va.type, "click")
+            user_blob = json.dumps(seen[0]["messages"][1])
+            self.assertIn("Action history sequence", user_blob)
+            self.assertIn("Click X", user_blob)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_sem_historico_sem_secao(self):
+        reply = '<Action>[{"action": "CLICK", "coordinate": [0.5, 0.25]}]</Action>'
+        srv, seen = _make_server(reply)
+        try:
+            base = f"http://127.0.0.1:{srv.server_port}/v1"
+            ad = vocaela.VocaelaAdapter(base_url=base)
+            ad.act_sync(Image.new("RGB", (50, 50), "white"), "Click X")
+            user_blob = json.dumps(seen[0]["messages"][1])
+            self.assertNotIn("Action history sequence", user_blob)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

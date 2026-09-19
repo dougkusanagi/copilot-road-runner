@@ -21,7 +21,7 @@ import time
 from typing import Literal
 
 import httpx
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 PlannerActionType = Literal[
     "open_app", "open_url", "focus_window", "type_text", "press_key",
@@ -74,6 +74,14 @@ class PlannerDecision(BaseModel):
     instruction: str | None = None
     ms: int = 0
 
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_coords(cls, data: object) -> object:
+        if isinstance(data, dict) and any(
+                k in data for k in ("x", "y", "coordinate", "bbox", "bbox_2d")):
+            raise ValueError(f"planner emitiu coordenadas (proibido): {data}")
+        return data
+
     @field_validator("type")
     @classmethod
     def _no_coords_type(cls, v: str) -> str:
@@ -82,6 +90,37 @@ class PlannerDecision(BaseModel):
     def assert_no_coords(self, raw: dict) -> None:
         if any(k in raw for k in ("x", "y", "coordinate", "bbox", "bbox_2d")):
             raise ValueError(f"planner emitiu coordenadas (proibido): {raw}")
+
+
+def planner_json_schema() -> dict:
+    """Schema JSON estrito da decisão (§5.4): `type` restrito ao Literal e
+    coordenadas impossíveis por construção (sem x/y)."""
+    return {
+        "type": "object",
+        "properties": {
+            "type": {"type": "string", "enum": sorted(list(PlannerActionType.__args__))},
+            "app": {"type": ["string", "null"]},
+            "url": {"type": ["string", "null"]},
+            "target": {"type": ["string", "null"]},
+            "text": {"type": ["string", "null"]},
+            "key": {"type": ["string", "null"]},
+            "keys": {"type": ["string", "null"]},
+            "instruction": {"type": ["string", "null"]},
+            "ms": {"type": "integer"},
+        },
+        "required": ["type"],
+        "additionalProperties": False,
+    }
+
+
+def planner_response_format() -> dict:
+    """`response_format` OpenAI-compatible p/ `llama-server` garantir JSON
+    válido conforme o schema (elimina a classe de erro 'planner não retornou
+    JSON válido'). Servidor que ignorar o campo: `extract_json` continua
+    como fallback."""
+    return {"type": "json_schema",
+            "json_schema": {"name": "planner_decision", "strict": True,
+                            "schema": planner_json_schema()}}
 
 
 def build_prompt(goal: str, window: str, ui_names: list[str],
@@ -145,16 +184,35 @@ class MiniCPMPlanner:
                 {"role": "user", "content": user},
             ],
             "temperature": self.temperature,
+            # §5.4: garante UM objeto JSON válido conforme o schema
+            # (llama-server honra `response_format`; quem ignorar cai no
+            # `extract_json` abaixo como fallback).
+            "response_format": planner_response_format(),
             # reasoning hibrido do MiniCPM5: modo rapido (sem thinking);
             # thinking consome tokens/latencia sem ajudar em decisao curta.
             "chat_template_kwargs": {"enable_thinking": False},
             "max_tokens": 256,
         }
         t0 = time.perf_counter()
-        with httpx.Client(timeout=self.timeout_s) as c:
-            r = c.post(f"{self.base_url}/chat/completions", json=payload)
-            r.raise_for_status()
-            data = r.json()
+        data: dict | None = None
+        last_err: Exception | None = None
+        for attempt in range(3):  # §5.6: 1 tentativa + 2 retries c/ backoff
+            try:  # (slot ocupado/timeout do llama-server)
+                with httpx.Client(timeout=self.timeout_s) as c:
+                    r = c.post(f"{self.base_url}/chat/completions", json=payload)
+                    r.raise_for_status()
+                    data = r.json()
+                break
+            except Exception as e:
+                last_err = e
+                retryable = isinstance(e, httpx.TimeoutException) or (
+                    isinstance(e, httpx.HTTPStatusError)
+                    and e.response is not None and e.response.status_code >= 500)
+                if not retryable or attempt == 2:
+                    break
+                time.sleep(0.5 * (attempt + 1))
+        if data is None:
+            raise RuntimeError(f"planner HTTP falhou: {last_err}")
         ms = (time.perf_counter() - t0) * 1000
         content = data["choices"][0]["message"]["content"]
         raw = extract_json(content)

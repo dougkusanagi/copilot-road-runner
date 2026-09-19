@@ -29,6 +29,7 @@ from pathlib import Path
 import psutil
 
 import safety
+import server
 from actions import execute
 from obs import capture_for_vision
 from planner import MiniCPMPlanner, PlannerDecision
@@ -51,6 +52,37 @@ _DIGIT_WORDS = {"0": ("zero",), "1": ("um", "one"), "2": ("dois", "two"),
                 "7": ("sete", "seven"), "8": ("oito", "eight"),
                 "9": ("nove", "nine")}
 _WORD_DIGIT = {w: d for d, ws in _DIGIT_WORDS.items() for w in ws}
+
+# §5.5: controles interativos primeiro (no Edge os 40 primeiros da árvore
+# são quase só chrome; o conteúdo web ficava fora do prompt).
+_INTERACTIVE_TYPES = {"button", "edit", "hyperlink", "menuitem", "listitem",
+                      "tabitem", "checkbox", "radiobutton", "combobox",
+                      "spinner", "splitbutton", "treeitem", "thumb", "slider"}
+
+
+def format_ui_names(items: list[dict], limit: int = 40) -> list[str]:
+    """`tipo:nome` p/ o planner, interativos primeiro (puro, testável).
+
+    Ex.: "Button:7", "Edit:Pesquisar". Sem coordenadas (o planner não vê
+    a tela). Nomes >60 chars são os mesmos que `_resolve_uia` ignora.
+    """
+    def label(it: dict) -> str | None:
+        name = (it.get("name") or "").strip()
+        if not name:
+            return None
+        ctype = (it.get("type") or "").strip() or "?"
+        return f"{ctype}:{name[:60]}"
+
+    ordered = sorted(items, key=lambda it: (
+        0 if (it.get("type") or "").strip().lower() in _INTERACTIVE_TYPES else 1))
+    out: list[str] = []
+    for it in ordered:
+        lab = label(it)
+        if lab:
+            out.append(lab)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def _log(obj: dict) -> None:
@@ -182,7 +214,7 @@ def _decide_planner(instruction: str, step: int, ctx: dict, cfg: dict,
     t["uia_ms"] = round((time.perf_counter() - t0) * 1000, 1)
     t["uia_title"] = title
     t["uia_count"] = len(items)
-    names = [(it.get("name") or "") for it in items][:40]
+    names = format_ui_names(items)
 
     # guard 1: bootstrap ANTES do planner (senão a decisão do 1B é descartada
     # e a latência, paga à toa).
@@ -253,7 +285,8 @@ def _decide_planner(instruction: str, step: int, ctx: dict, cfg: dict,
     except Exception:
         pass
     try:
-        va, vms = vocaela.act_sync(img, dec.instruction or "")
+        va, vms = vocaela.act_sync(img, dec.instruction or "",
+                                   history=ctx.get("hist_labels", []))
     except Exception as e:
         raise RuntimeError(f"vocaela falhou: {e}")
     t["vision_ms"] = round(vms, 1)
@@ -354,6 +387,27 @@ def _build_models(cfg: dict) -> tuple[MiniCPMPlanner, VocaelaAdapter]:
     return planner, vocaela
 
 
+def _ensure_local_servers(cfg: dict) -> dict:
+    """Sobe os 2 llama-server se os endpoints são desta máquina e estão caídos.
+
+    1ª execução baixa runtime+GGUFs em models/ (gitignored); nas seguintes,
+    só sobe/reusa. Config `runtime.auto_start: false` desliga. URLs remotas
+    (Sandbox → HOST_IP) são responsabilidade do host: nada é baixado aqui.
+    Retorna procs {"planner": Popen|None, "vision": Popen|None}.
+    """
+    rt = cfg.get("runtime", {})
+    if not bool(rt.get("auto_start", True)):
+        return {}
+    urls = (cfg.get("planner", {}).get("base_url", "http://127.0.0.1:8091/v1"),
+            cfg.get("vision", {}).get("base_url", "http://127.0.0.1:8082/v1"))
+    if not server.needs_local_serve(urls):
+        return {}
+    try:
+        return server.ensure_servers(urls, cfg)
+    except Exception as e:
+        raise RuntimeError(f"runtime local dos modelos falhou: {e}")
+
+
 # --- run ----------------------------------------------------------------------
 def run(instruction: str, cfg: dict) -> dict:
     max_steps = int(cfg.get("max_steps", 30))
@@ -363,20 +417,34 @@ def run(instruction: str, cfg: dict) -> dict:
         LOG.unlink()
 
     # --- sobe os dois modelos: OBRIGATÓRIOS (decisão 100% por modelos) ---
+    # Runtime próprio: se os endpoints são locais e estão caídos, sobe
+    # llama-server (baixa GGUFs na 1ª vez). URLs remotas: responsabilidade
+    # de quem as expõe (ex.: host p/ o Sandbox).
+    procs: dict = {}
+    try:
+        procs = _ensure_local_servers(cfg)
+    except RuntimeError as e:
+        print(f"RUNTIME DOS MODELOS: {e}")
+        print("Sem fallback programático: os modelos decidem. Corrija e rode de novo.")
+        _log({"event": "no_model", "planner": str(e)[:200]})
+        return {"test": instruction, "result": "no_model", "steps": 0,
+                "retries": 0, "planner_calls": 0, "vocaela_calls": 0}
+
     planner, vocaela = _build_models(cfg)
     st = planner.check()
     if not st.get("ok"):
         print(f"Planner MiniCPM5-1B OFFLINE: {st.get('error')}")
-        print("Suba o planner (llama-server em 8091) e rode de novo. "
+        print(f"Suba o planner ({planner.base_url}) ou rode `uv run python -m server`. "
               "Sem fallback programático: os modelos decidem.")
         _log({"event": "no_model", "planner": str(st.get("error"))[:200]})
+        server.stop_servers(procs)
         return {"test": instruction, "result": "no_model", "steps": 0,
                 "retries": 0, "planner_calls": 0, "vocaela_calls": 0}
     no_vision = bool(cfg.get("no_vision", False))
     vs = vocaela.check()
     if not vs.get("ok") and not no_vision:
         print(f"Vocaela OFFLINE ({vs.get('error')}); visual_action vai falhar — "
-              "suba o llama-server do Vocaela em 8082.")
+              f"suba o runtime da visão ({vocaela.base_url}) ou `uv run python -m server`.")
     print(f"Planner: MiniCPM ({planner.base_url} modelos={st.get('models')})")
     print(f"Visão: Vocaela ({vocaela.base_url} "
           f"{'ok' if vs.get('ok') else 'OFFLINE: ' + str(vs.get('error'))[:80]})")
@@ -548,6 +616,7 @@ def run(instruction: str, cfg: dict) -> dict:
             _ov.stop()
         except Exception:
             pass
+        server.stop_servers(procs)  # só encerra os que NÓS subimos
 
     total_ms = time.perf_counter() - total0
     print(f"\n{result.upper()}")

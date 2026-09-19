@@ -10,6 +10,15 @@
   → Python executa (tools, UIA, mouse/teclado) e NUNCA decide.
 - Ordem: `open/focus/type` (planner) → `uia_click` por NOME → Vocaela
   (só quando o elemento não está na accessibility tree).
+- Planner com `response_format: json_schema` (coordenadas impossíveis por
+  construção); contexto UIA como `tipo:nome` (interativos primeiro);
+  Vocaela recebe as últimas 3 ações como histórico.
+- Runtime próprio (`server.py`): endpoints locais caídos → baixa llama.cpp
+  + GGUFs p/ `models/` (gitignored, 1ª vez) e sobe `:8091`/`:8082`;
+  endpoint vivo é reusado, porta ocupada sem endpoint = erro honesto.
+  `runtime.auto_start: false` ou `--no-runtime` desliga; URLs remotas
+  (Sandbox → HOST_IP) nunca baixam aqui. `uv run python -m server`
+  deixa os dois no ar (`--host 0.0.0.0` p/ o Sandbox).
 - Sem modelos online = erro honesto, sem fallback programático.
 - Guard-rails determinísticos declarados (`loop.py`): bootstrap da janela do
   app ANTES do planner; anti-janela-errada e anti-repetição viram
@@ -26,8 +35,8 @@
   mic/modelo. Erro do engine NUNCA vira instrução (`on_error`). Sandbox não
   instala a UI. Plano/decisões: §10 do relatório.
 - Arquivos-chave: `main.py` (CLI), `loop.py` (observe→decide→act→verify),
-  `planner.py`, `vocaela.py`, `uia.py`, `actions.py`, `tools.py`,
-  `safety.py`, `config.py`, `obs.py`.
+  `planner.py`, `vocaela.py`, `server.py` (runtime llama.cpp), `uia.py`,
+  `actions.py`, `tools.py`, `safety.py`, `config.py`, `obs.py`.
 
 ## Comandos
 

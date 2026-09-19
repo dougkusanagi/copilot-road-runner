@@ -43,21 +43,26 @@ for _s in (sys.stdout, sys.stderr):
 
 def locate_only(target: str, cfg: dict) -> None:
     """Dry-run do grounding Vocaela: screenshot → act → imprime, sem clicar."""
-    from loop import _build_models
+    import server
+    from loop import _build_models, _ensure_local_servers
     from obs import capture_for_vision
     from vocaela import visual_to_action
 
-    img, origin, full = capture_for_vision(
-        max_long_edge=int(cfg.get("screenshot_max_width", 1024)))
-    _, vocaela = _build_models(cfg)
-    va, vms = vocaela.act_sync(img, target)
-    act = visual_to_action(va, (img.size[0], img.size[1]), origin)
-    print(json.dumps({"target": target, "visual": va.model_dump(),
-                      "origin": list(origin), "crop": list(img.size),
-                      "screen": list(full),
-                      "physical": {"x": act.x, "y": act.y,
-                                   "x2": act.x2, "y2": act.y2},
-                      "vision_ms": round(vms, 1)}, indent=2))
+    procs = _ensure_local_servers(cfg)
+    try:
+        img, origin, full = capture_for_vision(
+            max_long_edge=int(cfg.get("screenshot_max_width", 1024)))
+        _, vocaela = _build_models(cfg)
+        va, vms = vocaela.act_sync(img, target)
+        act = visual_to_action(va, (img.size[0], img.size[1]), origin)
+        print(json.dumps({"target": target, "visual": va.model_dump(),
+                          "origin": list(origin), "crop": list(img.size),
+                          "screen": list(full),
+                          "physical": {"x": act.x, "y": act.y,
+                                       "x2": act.x2, "y2": act.y2},
+                          "vision_ms": round(vms, 1)}, indent=2))
+    finally:
+        server.stop_servers(procs)
 
 
 def main() -> None:
@@ -71,6 +76,8 @@ def main() -> None:
     ap.add_argument("--vision-url", default=None, help="override de vision.base_url")
     ap.add_argument("--locate", default="",
                     help='dry-run Vocaela: --locate "Click the address bar"')
+    ap.add_argument("--no-runtime", action="store_true",
+                    help="não sobe llama-server local (usa endpoints como estão)")
     ap.add_argument("--ui", action="store_true",
                     help="tray + janela Spotlight com ditado (requer: uv sync --extra ui)")
     args = ap.parse_args()
@@ -82,6 +89,8 @@ def main() -> None:
         cfg["planner"]["base_url"] = args.planner_url
     if args.vision_url:
         cfg["vision"]["base_url"] = args.vision_url
+    if args.no_runtime:
+        cfg.setdefault("runtime", {})["auto_start"] = False
 
     if args.self_test:
         import safety
