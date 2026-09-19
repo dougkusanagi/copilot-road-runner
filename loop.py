@@ -359,6 +359,19 @@ def _key(a: Action) -> str:
     return f"{a.type}:{a.x},{a.y}:{a.text}:{a.key}:{a.target}"
 
 
+def _repeat_note(a: Action) -> str:
+    """last_error anti-repetição com o detalhe do que repetiu (puro, testável).
+
+    O 1B ignorava 'você repetiu focus 3 vezes' e repetia com outro alvo;
+    com o alvo citado ele troca de estratégia em vez de variar o texto.
+    """
+    arg = a.target or a.text or a.key or ""
+    detail = f"{a.type}({arg[:60]})" if arg else a.type
+    return (f"você repetiu {detail} 3 vezes sem avançar; "
+            "escolha uma ação DIFERENTE (outro tipo de ação, não o mesmo "
+            "tipo com outro texto).")
+
+
 def _vram() -> str:
     try:
         import subprocess
@@ -549,8 +562,7 @@ def run(instruction: str, cfg: dict) -> dict:
                 if not ctx.get("loop_warned"):
                     ctx["loop_warned"] = True
                     history.clear()
-                    if fail_step("repeticao", f"você repetiu {dec.action.type} 3 vezes "
-                                              "sem avançar; escolha uma ação DIFERENTE."):
+                    if fail_step("repeticao", _repeat_note(dec.action)):
                         continue
                     result = "stuck"
                     break

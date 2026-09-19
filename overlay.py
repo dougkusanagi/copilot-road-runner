@@ -23,6 +23,17 @@ _BASE = (10, 6, 3)   # larguras base (externa, meio, interna)
 _AMP = 4              # amplitude do pulso (px) aplicada a todas as camadas
 _TEXT = "Este computador está sendo controlado pelo agente   |   Ctrl+Alt+Esc para parar"
 
+# Título das janelas do overlay. O planner "vê" a janela ativa pelo título:
+# sem isso ele enxergava 'tk' (default do Tk), tentava focus("tk") e o
+# agente passava a focar o próprio overlay. uia.snapshot e tools.focus
+# ignoram janelas com este título (is_overlay_title).
+OVERLAY_TITLE = "crr-overlay"
+
+
+def is_overlay_title(title: str) -> bool:
+    """True se o título é de janela do overlay (nunca é alvo)."""
+    return (title or "").strip().lower() == OVERLAY_TITLE
+
 _started = False
 _proc = None
 
@@ -67,6 +78,7 @@ def show() -> None:
         win = tk.Tk() if i == 0 else tk.Toplevel()
         if i == 0:
             root = win
+        win.title(OVERLAY_TITLE)  # nunca confundir com app real (era 'tk')
         win.overrideredirect(True)
         # geometria inicial (Tk não lida bem com offset negativo); o
         # posicionamento exato vem via SetWindowPos abaixo.

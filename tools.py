@@ -61,9 +61,11 @@ def open_url(url: str) -> Action:
     return Action(type="open", target=f"{_URL_PREFIX}{u}")
 
 
-def focus_window(title_substr: str, timeout: float = 8.0) -> bool:
+def focus_window(title_substr: str, timeout: float = 3.0) -> bool:
     """Traz janela p/ frente por substring do título. Aceita alternativas com '||'."""
     from pywinauto import Desktop
+
+    from overlay import is_overlay_title
 
     alts = [a.strip().lower() for a in title_substr.split("||") if a.strip()]
     t0 = time.perf_counter()
@@ -74,6 +76,8 @@ def focus_window(title_substr: str, timeout: float = 8.0) -> bool:
             for w in desk.windows(top_level_only=True, visible_only=True):
                 try:
                     title = w.window_text() or ""
+                    if is_overlay_title(title):
+                        continue  # nunca focar a própria borda "controlado"
                     if any(a in title.lower() for a in alts):
                         matches.append((title, w))
                 except Exception:
@@ -93,6 +97,8 @@ def focus_window(title_substr: str, timeout: float = 8.0) -> bool:
         for w in desk.windows(top_level_only=True, visible_only=False):
             try:
                 title = w.window_text() or ""
+                if is_overlay_title(title):
+                    continue
                 if not any(a in title.lower() for a in alts):
                     continue
                 try:

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import time
 
+from overlay import is_overlay_title
+
 MAX_DEPTH = 6
 
 
@@ -59,6 +61,14 @@ def active_window_snapshot(timeout: float = 5.0,
             if h:
                 try:
                     active = desk.window(handle=h).wrapper_object()
+                    try:
+                        # O overlay (borda "controlado") pode estar em
+                        # foreground: nunca é a janela do app (era 'tk' e o
+                        # planner tentava focus("tk") no próprio overlay).
+                        if is_overlay_title(active.window_text() or ""):
+                            active = None
+                    except Exception:
+                        pass
                 except Exception:
                     active = None
         except Exception:
@@ -71,6 +81,8 @@ def active_window_snapshot(timeout: float = 5.0,
                 return [], "", None
             for w in wins:
                 try:
+                    if is_overlay_title(w.window_text() or ""):
+                        continue
                     for attr in ("has_focus", "is_active", "has_keyboard_focus"):
                         fn = getattr(w, attr, None)
                         if callable(fn) and fn():
@@ -84,6 +96,8 @@ def active_window_snapshot(timeout: float = 5.0,
             if active is None:
                 for w in wins:
                     try:
+                        if is_overlay_title(w.window_text() or ""):
+                            continue
                         if (w.window_text() or "").strip():
                             active = w
                             break

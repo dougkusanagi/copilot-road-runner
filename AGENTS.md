@@ -107,6 +107,11 @@ cada abertura é um ambiente limpo descartável.
   `UV_PROJECT_ENVIRONMENT` fora de `C:\crr` (senão sobrescreve o `.venv` do host).
 - Timeouts das ferramentas em ms; trial no Sandbox leva ~1 min
   (sem `-Bootstrap`).
+- Overlay Tk nasce com título `tk` e pode estar em foreground: o planner via
+  `tk`, copiava o exemplo do spec (`focus("trecho do título")`) e focava o
+  próprio overlay → LOOP (run real 19/09). Janelas tituladas `crr-overlay`
+  são ignoradas em `uia.snapshot` e `tools.focus` (`is_overlay_title`); exemplo
+  do spec virou `Google` + regra anti-cópia no prompt; `focus` timeout 8s→3s.
 
 ## Workflow de git
 

@@ -34,7 +34,7 @@ PlannerActionType = Literal[
 TOOLS_SPEC = """\
 - {"type":"open_app","app":"notepad|calc|msedge|chrome|brave"} — abrir aplicativo
 - {"type":"open_url","url":"https://..."} — abrir URL no Edge
-- {"type":"focus_window","target":"trecho do título"} — focar janela
+- {"type":"focus_window","target":"Google"} — focar janela cujo título CONTÉM o texto (só se essa janela existe; se o app não está aberto, use open_app/open_url)
 - {"type":"type_text","text":"..."} — digitar na janela focada
 - {"type":"press_key","key":"enter|esc|tab|f5"} — uma tecla
 - {"type":"hotkey","keys":"ctrl+n|ctrl+l|..."} — combinação
@@ -51,8 +51,12 @@ Available actions:
 
 Rules:
 - NEVER output coordinates (no x, y). You do not see the screen.
+- NEVER copy the example strings from Available actions (e.g. "Google"):
+  target/text/url must come from the Goal, Current window or UI elements.
 - Prefer native tools (open_app, focus_window, type_text) over visual_action.
-- If the current window is NOT the target app, use focus_window (NOT open_app again).
+- If the target app is not the current window: use focus_window ONLY when a
+  window of that app is already open; otherwise use open_app (or open_url
+  for a website). NEVER focus_window a target that already missed.
 - NEVER repeat the same action twice in a row; if it did not advance, do something else.
 - Prefer uia_click when the target name appears in UI elements.
 - Use visual_action ONLY when the element is missing from UI elements.
