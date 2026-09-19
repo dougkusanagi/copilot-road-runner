@@ -180,6 +180,16 @@ class TestSandboxAgent(unittest.TestCase):
                        "done.marker", "command.ps1", "exitcode.txt"):
             self.assertIn(needle, doc, f"docs sem: {needle}")
 
+    def test_agents_md_memoria(self):
+        agents = ROOT / "AGENTS.md"
+        self.assertTrue(agents.is_file(), "AGENTS.md sumiu da raiz")
+        doc = agents.read_text(encoding="utf-8")
+        for needle in ("Invoke-SandboxTest.ps1", "Start-Sandbox.ps1",
+                       "LASTEXITCODE", "8091", "8082",
+                       "uv run python -m unittest discover -s tests",
+                       "FAILSAFE", "sandbox-test-env.md"):
+            self.assertIn(needle, doc, f"AGENTS.md sem: {needle}")
+
 
 class TestSandboxCliESalvaguardas(unittest.TestCase):
     def test_main_help_tem_flags_do_loop_diario(self):
