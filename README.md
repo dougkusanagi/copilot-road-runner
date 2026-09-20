@@ -1,5 +1,10 @@
 # copilot-road-runner — Computer Use local MVP (Windows)
 
+> Este README descreve a implementação atual. A evolução para GPUs a partir de
+> 6 GB, skills e comparação de modelos está no
+> [plano vigente de refatoração](docs/plano-refatoracao-2026-09-19.md)
+> (planejado, ainda não implementado).
+
 Fluxo: instrução → planner MiniCPM5-1B (`:8091`, só texto, nunca recebe
 screenshot, nunca emite coordenadas) → UIA por nome (`pywinauto`) →
 Vocaela-2 (`:8082`, screenshot → ação visual 0..1, só quando o elemento

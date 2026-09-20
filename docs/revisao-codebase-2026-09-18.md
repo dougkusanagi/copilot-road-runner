@@ -1,5 +1,16 @@
 # Revisão da base de código e do plano — 18/09/2026
 
+> **DOCUMENTO HISTÓRICO — propostas substituídas em 19/09/2026.**
+> O [plano de refatoração vigente](plano-refatoracao-2026-09-19.md) é a fonte
+> para arquitetura futura, modelos, prioridades e critérios de aceite. Este
+> relatório registra achados de uma versão anterior; vários já foram corrigidos.
+> As propostas abaixo NÃO são instruções para reimplementação. Em particular:
+> não reintroduzir `open_url`; dry-run deve bloquear todos os efeitos; conclusão
+> exige evidências (pode haver tarefa já cumprida sem ação); dois modelos e
+> planner sem imagem descrevem o baseline, não uma restrição ao perfil unificado.
+> O guia Sandbox permanece operacional. Pendências úteis foram incorporadas ao
+> plano novo; consultar o código antes de tratar qualquer bug daqui como atual.
+
 > Escopo: todos os `.py` da raiz (12 arquivos, ~2.000 linhas), os 4 arquivos de
 > teste, os scripts PowerShell do Sandbox, `AGENTS.md`, `README.md`,
 > `docs/sandbox-test-env.md`, `pyproject.toml`/`uv.lock` e `.gitignore`.
@@ -270,7 +281,7 @@ Pontos a corrigir/decidir (além de C2 e dos itens P2 acima):
    (`172.x`/`192.168.x` da vEthernet). Pequeno, mas o script cria regras
    permanentes no host.
 
-## 5. Arquitetura e plano — pontos de tensão e propostas
+## 5. Arquitetura e plano — propostas históricas, substituídas
 
 ### 5.1 "100 % IA" vs guard-rails determinísticos
 
@@ -444,7 +455,10 @@ Observação: os testes de `test_sandbox_plan.py`/`test_cleanup.py` que fazem
 frágeis a refactor de texto e não testam comportamento; não crescer nessa
 direção — o `ParseFile` do PowerShell e o `_render_wsb` → XML são o modelo certo.
 
-## 9. Roadmap priorizado
+## 9. Roadmap histórico — não executar como plano vigente
+
+> Substituído por [fases F0–F7 do plano de 19/09](plano-refatoracao-2026-09-19.md).
+> Status e estimativas abaixo são registros da época, não pendências atuais.
 
 > **Status (18/09, mesmo dia):** P0 C1–C7 e P1 C8–C15 implementados e commitados
 > (`5f55188`, `f0e843d`, `0b2b2b8`, `b09424f`) — 77 testes, `ruff` limpo, CI Windows.
@@ -488,7 +502,7 @@ direção — o `ParseFile` do PowerShell e o `_render_wsb` → XML são o model
 | **P1 (novo)** | Tray (`pystray`) + janela Spotlight (`pywebview`) + hotkey global; extra `ui` | 4 h | §10 |
 | **P1 (novo)** | Ditado ao vivo `stt.py` (faster-whisper int8, parciais, silêncio → envio) | 4 h | §10 |
 
-## 10. Adição ao plano — ícone na tray + janela Spotlight + ditado ao vivo
+## 10. Histórico da UI — ícone na tray + janela Spotlight + ditado ao vivo
 
 > Pedido em 18/09: "ícone na tray e uma interface minimalista como o Spotlight
 > com caixa de texto + botão enviar + botão de voz". Esclarecido: o botão de voz

@@ -3,7 +3,32 @@
 > Arquivo de memória para agentes. Atualize ao mudar arquitetura, plano de
 > testes ou descobrir quirk de plataforma. Idioma do repo: PT-BR.
 
-## Arquitetura (2 modelos; Python executa/observa/veta, nunca escolhe)
+## Direção vigente e ordem de leitura
+
+- **Plano de evolução vigente:** [docs/plano-refatoracao-2026-09-19.md](docs/plano-refatoracao-2026-09-19.md).
+  Ler antes de refatorar. Suas fases estão planejadas, não implementadas.
+  A revisão de 18/09 é histórica; não executar seu roadmap como backlog atual.
+- Produto: computer use local, rápido, para GPU a partir de **6 GB de VRAM**;
+  entender pedidos, observar monitores/janelas e usar mouse/teclado reais.
+  UIA localiza e informa; modo GUI não usa edição semântica invisível ou open_url.
+- Evoluir o código existente. Comparar perfil **duplo** (planner textual + visão)
+  e **unificado** (VLM que planeja e enxerga), conforme matriz e gates do plano.
+  Não fixar dois modelos como requisito futuro nem trocar default sem benchmark.
+  A proibição de screenshots/coordenadas no planner vale para o papel textual;
+  o perfil unificado planejado terá contrato visual vinculado ao frame.
+- Python observa/executa/veta; modelos escolhem ações, alvos, subobjetivos e skills.
+  Memória de tarefa, IDs de observação/frame e confirmação de efeitos substituem
+  heurísticas por app gradualmente, mantendo safety e testes durante a migração.
+- Skills sob demanda podem habilitar CLI/scripts delimitados (ex.: Blender),
+  explicitamente separados da GUI. Não habilitar shell arbitrário como fallback.
+- `empero-ai/Qwen3.8-2B-Distill` é candidato comunitário experimental, não um
+  Qwen3.8-2B oficial com visão validada. Conferir pesos/projetor e suporte antes
+  de habilitá-lo como VLM; detalhes e fontes no plano.
+- Uso normal continua local, runtime próprio, sem flagship/API obrigatório.
+  Testes dev com cliques continuam exclusivamente no Sandbox; exceções de
+  hardware não cobertas exigem ambiente de teste dedicado, nunca o desktop de trabalho.
+
+## Arquitetura implementada hoje (baseline de 2 modelos)
 
 - **Planner MiniCPM5-1B** (`:8091`, só texto, nunca recebe screenshot, nunca
   emite coordenadas) → **Vocaela-2** (`:8082`, screenshot → ação visual 0..1)
@@ -29,7 +54,8 @@
   `max_steps`. `open_app` = whitelist (`tools.APP_COMMANDS`), nada passa por
   shell. Sem teleporte p/ URL (`open_url` removido): navegar é pela UI do
   navegador (ctrl+l, digitar, enter, cliques), como um humano.
-- Revisão completa + roadmap: `docs/revisao-codebase-2026-09-18.md`.
+- Revisão histórica: `docs/revisao-codebase-2026-09-18.md`.
+  Roadmap vigente: `docs/plano-refatoracao-2026-09-19.md`.
 - **UI opcional** (`main.py --ui`, extra `ui`: `uv sync --extra ui`): `app.py`
   = tray (pystray, thread daemon) + janela Spotlight (pywebview/WebView2,
   thread principal) + hotkey `ui.hotkey` (`ctrl+alt+space`) + agente em
@@ -37,7 +63,8 @@
   (faster-whisper `base` int8; parciais a cada 1 s, silêncio 1,5 s → final
   → `auto_send`). Lógica do ditado é pura (`Dictation.feed`) e testada sem
   mic/modelo. Erro do engine NUNCA vira instrução (`on_error`). Sandbox não
-  instala a UI. Plano/decisões: §10 do relatório.
+  instala a UI. Histórico de implementação: §10 do relatório; preservar durante
+  a refatoração, mantendo STT inicialmente em CPU no orçamento de 6 GB.
 - Arquivos-chave: `main.py` (CLI), `loop.py` (observe→decide→act→verify),
   `planner.py`, `vocaela.py`, `server.py` (runtime llama.cpp), `uia.py`,
   `actions.py`, `tools.py`, `safety.py`, `config.py`, `obs.py`.

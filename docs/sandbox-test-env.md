@@ -1,5 +1,12 @@
 # Sandbox de teste — só para testes dev (o uso real é local, sem parâmetros)
 
+> **Escopo:** este guia descreve os scripts e o baseline implementados hoje.
+> A evolução dos perfis de modelos e a bateria de avaliação estão no
+> [plano vigente de refatoração](plano-refatoracao-2026-09-19.md).
+> Dois endpoints/modelos abaixo não são requisito do futuro perfil unificado.
+> Os modelos continuam na GPU do host e os cliques no Sandbox; não medir VRAM
+> pela GPU virtual do Sandbox nem executar testes de interação no host.
+
 > O sistema roda **no host por padrão** (`uv run python main.py "..."`,
 > sem `--config`): o runtime próprio (`server.py`) baixa os modelos na 1ª
 > vez e sobe `:8091`/`:8082` sozinho. O Sandbox existe para um único fim:
