@@ -144,6 +144,11 @@ def _execute_inner(action: Action, focus_window, open_app) -> str:
         return f"answer({(action.text or '')[:80]})"  # só observação, sem input
     if t == "done":
         return "done"
+    if t in ("ask", "perceive"):
+        # R1: pergunta e percepção nunca tocam mouse/teclado — o executor do
+        # loop ramifica por kind antes de chegar aqui. Cair aqui é bug do
+        # executor, não pedido do modelo.
+        raise ValueError(f"{t} nunca executa input físico (bug do executor)")
     raise ValueError(f"action desconhecida: {t}")
 
 
@@ -156,6 +161,8 @@ def check_preconditions(action: Action,
     ativa (quando informada); foco no app esperado (quando informado).
     """
     t = action.type
+    if t in ("ask", "perceive"):
+        return f"{t} não é ação física; executor deve ramificar por kind"
     if t in ("click", "double_click", "right_click", "middle_click",
              "move", "drag"):
         if action.x is None or action.y is None:

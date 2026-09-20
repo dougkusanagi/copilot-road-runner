@@ -24,10 +24,10 @@ from pydantic import BaseModel, Field, model_validator
 
 ActionType = Literal["click", "double_click", "right_click", "middle_click", "move",
                      "drag", "type", "scroll", "hotkey", "open", "focus", "wait",
-                     "answer", "done", "ask"]
+                     "answer", "done", "ask", "perceive"]
 SourceType = Literal["planner", "uia", "vocaela"]
 
-DecisionKind = Literal["action", "perception", "skill", "sequence", "finish"]
+DecisionKind = Literal["action", "perception", "skill", "sequence", "question", "finish"]
 CompletionStatus = Literal["success", "partial", "blocked", "cancelled"]
 SentStatus = Literal["sent", "not_sent", "unknown"]
 
@@ -137,13 +137,26 @@ class Decision(BaseModel):
         # sequence carrega primitivas em steps (action = 1ª primitiva,
         # representativa); skill CLI carrega skill/skill_args (action é
         # placeholder nunca executado — o executor ramifica por kind antes
-        # de execute()); action/perception/finish nunca carregam steps.
+        # de execute()); perception/question/finish amarram action e campos.
         if self.kind == "sequence" and not self.steps:
             raise ValueError("kind=sequence exige steps (1..3 primitivas)")
         if self.kind == "skill" and not (self.skill or "").strip():
             raise ValueError("kind=skill exige skill")
-        if self.kind in ("action", "perception", "finish") and self.steps:
+        if self.kind in ("action", "perception", "question", "finish") and self.steps:
             raise ValueError(f"kind={self.kind} não carrega steps (use kind=sequence)")
+        if self.kind == "question" and self.action.type != "ask":
+            raise ValueError("kind=question exige action ask")
+        if self.kind == "finish" and self.action.type != "done":
+            raise ValueError("kind=finish exige action done")
+        if self.kind == "perception" and (
+            self.action.type != "perceive" or not (self.perception or "").strip()
+        ):
+            raise ValueError("kind=perception exige action perceive + spec em perception")
+        if self.kind == "action" and self.action.type in ("ask", "done", "perceive"):
+            raise ValueError(
+                f"action {self.action.type} exige kind próprio "
+                "(question/finish/perception), não kind=action"
+            )
         return self
 
 

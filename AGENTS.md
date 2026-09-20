@@ -18,14 +18,15 @@
   `docs/relatorio-r0-r3-2026-09-20.md`. B1 falhou 0/3 no primeiro probe real
   (repetiu ctrl+t); U1 passou 3/3, mas levou ~38 s aquecido em CPU-only.
   Isso não muda o default nem aprova R3/R4/R5.
-  R1 parcial em 20/09 (`tests/test_r1_cycle.py`, 224 verdes): observação ≠
-  evidência (obs/frame auto-add removidos; só efeito confirmado entra em
-  `task_state.evidences`); `done_items` exige `evidence_refs` válidas
-  (proposta vs aceita em `tm`); `Decision(kind=sequence)` sem `wait(0)`
-  fictício; `ActionResult` estruturado no `run()`; `observation_ref` em
-  toda decisão. R1 segue aberta: `ask` ainda é `Action` (falta kind
-  pergunta), `perception`/`finish` não migrados, probes ≥30 cenas e E2E
-  Sandbox pendentes.
+  R1 concluída em 20/09 (235 verdes: `tests/test_r1_cycle.py` +
+  `tests/test_r1_contracts.py`): observação ≠ evidência; `done_items` exige
+  `evidence_refs` (proposta vs aceita em `tm`); 6 kinds fim a fim
+  (action/perception/question/skill/sequence/finish) — `perceive`
+  (`uia_refresh`/`read_focused`, teto 6/run) relê sem input físico e alimenta
+  o prompt; `ask`→question, `done`→finish; `ActionResult` só p/ atuação real;
+  `observation_ref` em toda decisão. Probes com modelos reais (≥30 cenas) e
+  E2E Sandbox ficam p/ R3/R4. Próxima: R2 (percepção visual/OCR, UIA
+  diagnosticável, confirmação específica).
 - Produto: computer use local, rápido, para GPU a partir de **6 GB de VRAM**;
   entender pedidos, observar monitores/janelas e usar mouse/teclado reais.
   UIA localiza e informa; modo GUI não usa edição semântica invisível ou open_url.

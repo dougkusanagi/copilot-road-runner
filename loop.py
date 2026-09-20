@@ -275,6 +275,9 @@ def _planner_to_action(dec: PlannerDecision) -> Action | None:
         # None aqui é o que o torna alcançável (regressão 19/09: voltar
         # wait(0) executava o placeholder sem validar os steps).
         return None
+    if t == "perceive":
+        # R1: cai no ramo dedicado abaixo (só leitura, sem input físico).
+        return None
     return None  # uia_click, visual_action
 
 
@@ -344,6 +347,65 @@ def _sequence_to_actions(dec: PlannerDecision) -> list[Action]:
     return out
 
 
+# --- percepção read-only R1 ---------------------------------------------------
+# O planner textual nunca vê pixels; `perceive` é como ele pede releitura
+# SEM clicar/digitar. Só UIA + campo focado nesta etapa (OCR visual é R2):
+# superfície pequena, real e testável. Fatos voltam como observação (dados),
+# nunca como evidência confirmada nem como instrução.
+PERCEPTION_SPECS = ("uia_refresh", "read_focused")
+PERCEPTION_BUDGET_DEFAULT = 6
+
+
+def _check_perception_budget(ctx: dict, cfg: dict) -> None:
+    """Teto separado p/ percepções (F3/R1): excesso vira erro ao modelo."""
+    max_p = int(cfg.get("perception", {}).get("max_perceptions", PERCEPTION_BUDGET_DEFAULT))
+    if int(ctx.get("n_perceptions", 0)) >= max_p:
+        raise RuntimeError(
+            f"perceive recusado: limite de {max_p} releituras por run; "
+            "aja com o observável (cliques/teclado), não releia."
+        )
+
+
+def _run_perception(
+    spec: str,
+    ctx: dict,
+    cfg: dict,
+    tm: dict,
+    snapshot_fn=None,
+    focused_fn=None,
+) -> str:
+    """Releitura read-only: NENHUM input físico. Retorna fatos p/ o prompt."""
+    del cfg
+    spec = (spec or "").strip().lower()
+    if spec not in PERCEPTION_SPECS:
+        raise RuntimeError(f"perceive({spec!r}) inválido: use um de {list(PERCEPTION_SPECS)}")
+    snap = snapshot_fn or active_window_snapshot
+    items, title, _wrect = snap()
+    names = format_ui_names(items)
+    from schemas import new_id as _new_id
+
+    obs_id = _new_id("obs")
+    if spec == "read_focused":
+        read = (focused_fn or focused_value)()
+        facts = (
+            f"perceive(read_focused @{obs_id}): window={title[:80]!r}; "
+            f"focused={(read[:120] if read else '(vazio/ilegível)')!r}"
+        )
+    else:
+        facts = (
+            f"perceive(uia_refresh @{obs_id}): window={title[:80]!r}; "
+            f"ui={'; '.join(names[:15]) or '(sem elementos expostos)'}"
+        )
+    tm["perception"] = {"spec": spec, "observation_id": obs_id, "facts": facts[:500]}
+    try:
+        feats = ctx.setdefault("perception_facts", [])
+        feats.append(facts[:500])
+        del feats[:-5]
+    except Exception:
+        pass
+    return facts
+
+
 def _skills_catalog(cfg: dict) -> str:
     """Catálogo compacto F5 (orçamento; vazio = skills desligadas)."""
     if cfg.get("skills", {}).get("enabled", True) is False:
@@ -391,6 +453,7 @@ def _short(dec: PlannerDecision) -> str:
         or dec.keys
         or dec.instruction
         or dec.skill
+        or dec.perception
         or ""
     )
     if dec.type == "use_skill" and getattr(dec, "args", None):
@@ -550,6 +613,8 @@ def _decide_planner(
             action=Action(type="ask", text=(f"Qual perfil do Chrome devo usar? {shown}")),
             source="planner",
             confidence=None,
+            kind="question",
+            expected_effect="resposta humana vira observação",
             reason="seletor de perfil do Chrome exige escolha humana",
         ), t
     dec: PlannerDecision | None = None
@@ -724,7 +789,30 @@ def _decide_planner(
                 skill=man.get("name", ""),
                 skill_args=args,
                 expected_effect=f"skill {man.get('name')}: {man.get('verify', '')}",
+                observation_ref=t.get("observation_id", ""),
                 reason=f"planner use_skill({man.get('name')})",
+            ), t
+        if dec.type == "ask":
+            # R1: pergunta é kind próprio (nunca ação física).
+            return Decision(
+                action=native,
+                source="planner",
+                confidence=None,
+                kind="question",
+                expected_effect="resposta humana vira observação",
+                observation_ref=t.get("observation_id", ""),
+                reason=f"planner {_short(dec)}",
+            ), t
+        if dec.type == "done":
+            # R1: conclusão é kind próprio (evidências já vetadas acima).
+            return Decision(
+                action=native,
+                source="planner",
+                confidence=None,
+                kind="finish",
+                expected_effect="conclusão com evidências confirmadas",
+                observation_ref=t.get("observation_id", ""),
+                reason=f"planner {_short(dec)}",
             ), t
         return Decision(
             action=native, source="planner", confidence=None, reason=f"planner {_short(dec)}"
@@ -759,6 +847,25 @@ def _decide_planner(
             expected_effect=f"sequência de {len(acts)} primitivas",
             observation_ref=t.get("observation_id", ""),
             reason=f"planner sequence({_steps_label(acts)})",
+        ), t
+
+    if dec.type == "perceive":
+        # R1: percepção read-only pedida pelo modelo; a releitura (sem input
+        # físico) executa no run(). Spec validado aqui; teto separado no run().
+        spec = (dec.perception or "").strip().lower()
+        if spec not in PERCEPTION_SPECS:
+            raise RuntimeError(
+                f"perceive({dec.perception!r}) inválido: use um de {list(PERCEPTION_SPECS)}"
+            )
+        return Decision(
+            action=Action(type="perceive", text=spec),
+            source="planner",
+            confidence=None,
+            kind="perception",
+            perception=spec,
+            expected_effect="releitura sem input físico; fatos voltam como observação",
+            observation_ref=t.get("observation_id", ""),
+            reason=f"planner perceive({spec})",
         ), t
 
     if dec.type == "uia_click":
@@ -839,6 +946,8 @@ def decide(
         raise RuntimeError("hotkey precisa de key")
     if a.type == "ask" and not (a.text or "").strip():
         raise RuntimeError("ask precisa de text (a pergunta ao humano)")
+    if a.type == "perceive" and not (a.text or "").strip():
+        raise RuntimeError("perceive precisa de spec (uia_refresh|read_focused)")
     if dec.confidence is not None and not (0.0 <= dec.confidence <= 1.0):
         raise RuntimeError(f"confidence fora de 0..1: {dec.confidence}")
     return dec, tm
@@ -1340,6 +1449,7 @@ def run(instruction: str, cfg: dict, dry_run: bool = False) -> dict:
                 "answer",
                 "done",
                 "ask",
+                "perceive",
             ):
                 a = dec.action
                 arg = a.target or a.text or a.key or ""
@@ -1397,7 +1507,7 @@ def run(instruction: str, cfg: dict, dry_run: bool = False) -> dict:
 
             e0 = time.perf_counter()
             try:
-                if dec.action.type == "ask":
+                if dec.kind == "question":
                     # Human-in-the-loop: pergunta, registra a resposta como
                     # observação e segue. Não consome max_steps (como retry),
                     # mas tem teto (ask.max_asks, default 3).
@@ -1433,6 +1543,15 @@ def run(instruction: str, cfg: dict, dry_run: bool = False) -> dict:
                                     break
                     except Exception:
                         pass
+                elif dec.kind == "perception":
+                    # R1: releitura read-only, sem mouse/teclado. Teto próprio
+                    # (perception.max_perceptions); fatos voltam como
+                    # observação (nunca evidência confirmada).
+                    _check_perception_budget(ctx, cfg)
+                    facts = _run_perception(dec.perception, ctx, cfg, tm)
+                    ctx["n_perceptions"] = int(ctx.get("n_perceptions", 0)) + 1
+                    desc = f"perceive({dec.perception}) => {facts[:160]}"
+                    emit("PERCEIVE", facts[:160], "")
                 elif dry_run:
                     a = dec.action
                     arg = a.target or a.text or a.key or ""
@@ -1514,13 +1633,14 @@ def run(instruction: str, cfg: dict, dry_run: bool = False) -> dict:
                 who = "planner" if src == "planner" else "visão"
                 ctx["last_error"] = f"{who} respondeu: {dec.action.text}"[:300]
 
-            if dec.action.type == "done":
+            if dec.kind == "finish":
                 ctx["hist_labels"].append(label)
                 _log(
                     {
                         "step": step,
                         "event": "completion",
                         "source": dec.source,
+                        "kind": dec.kind,
                         "did": label,
                         "action": dec.action.model_dump(),
                         "evidences": list(tm.get("planner_decision", {}).get("evidences") or []),
@@ -1554,24 +1674,27 @@ def run(instruction: str, cfg: dict, dry_run: bool = False) -> dict:
                 cnote = ""
                 confirmed = False
             # R1: resultado estruturado (ID, enviado/confirmado, erro, pós-estado,
-            # evidências). Dry-run nunca envia: sent=not_sent, sem evidência.
-            try:
-                from schemas import ActionResult as _AR
-                from schemas import new_id as _nid
+            # evidências). Só p/ atuação real (action/sequence/skill): pergunta
+            # e percepção não enviam input — já têm tm["ask"]/tm["perception"].
+            # Dry-run nunca envia: sent=not_sent, sem evidência.
+            if dec.kind in ("action", "sequence", "skill"):
+                try:
+                    from schemas import ActionResult as _AR
+                    from schemas import new_id as _nid
 
-                ev_label = f"{label} => {vnote}"
-                ar = _AR(
-                    action_id=_nid("act"),
-                    sent=("not_sent" if dry_run else "sent"),
-                    confirmed=bool(ok and confirmed and not dry_run),
-                    evidences=([ev_label] if (ok and confirmed and not dry_run) else []),
-                    error=("" if ok else vnote[:200]),
-                    post_state=vnote[:300],
-                )
-                tm["action_result"] = ar.model_dump()
-                ctx["last_action_result"] = ar.model_dump()
-            except Exception:
-                pass
+                    ev_label = f"{label} => {vnote}"
+                    ar = _AR(
+                        action_id=_nid("act"),
+                        sent=("not_sent" if dry_run else "sent"),
+                        confirmed=bool(ok and confirmed and not dry_run),
+                        evidences=([ev_label] if (ok and confirmed and not dry_run) else []),
+                        error=("" if ok else vnote[:200]),
+                        post_state=vnote[:300],
+                    )
+                    tm["action_result"] = ar.model_dump()
+                    ctx["last_action_result"] = ar.model_dump()
+                except Exception:
+                    pass
             emit("VERIFY", vnote, "")
             metrics["steps"] += 1
             _log(

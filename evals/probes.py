@@ -24,6 +24,8 @@ def load_fixture(name: str) -> dict:
 def decision_key(decision: PlannerDecision) -> str:
     if decision.type == "hotkey":
         return f"hotkey:{(decision.keys or decision.key or '').lower()}"
+    if decision.type == "perceive":
+        return f"perceive:{(decision.perception or '').lower()}"
     return decision.type
 
 

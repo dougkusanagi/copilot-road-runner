@@ -362,7 +362,11 @@ de GPU ao processo sem evidência.
 
 - [x] R0: diagnóstico reproduzível e avaliação corrigida (20/09; ver
   `docs/relatorio-r0-r3-2026-09-20.md`).
-- [ ] R1: memória/contratos/conclusão integrados ao loop real.
+- [x] R1: memória/contratos/conclusão integrados ao loop real (20/09; 235
+  verdes em `tests/test_r1_cycle.py` + `tests/test_r1_contracts.py`: 6 kinds
+  — action/perception/question/skill/sequence/finish — produzidos e consumidos
+  de ponta a ponta, done implícito removido, ciclo obs→dec→result→prompt com
+  falso done/duplicação vetados; probes com modelos reais e E2E ficam p/ R3/R4).
 - [ ] R2: conteúdo visual/UIA e confirmação específica dos efeitos.
 - [ ] R3: modelos e base selecionados por evidência, ou inviabilidade reportada.
 - [ ] R4: execução genérica no Sandbox com resultados corretos.
