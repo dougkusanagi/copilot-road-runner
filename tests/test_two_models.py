@@ -152,6 +152,29 @@ class TestPlannerClient(unittest.TestCase):
             srv.shutdown()
             srv.server_close()
 
+    def test_qwenvl_unificado_recebe_screenshot(self):
+        from unittest.mock import patch
+
+        srv, seen = _make_server('{"type": "hotkey", "keys": "ctrl+l"}')
+        try:
+            base = f"http://127.0.0.1:{srv.server_port}/v1"
+            pl = planner.QwenVLPlanner(
+                base_url=base, model="Qwen3-VL-2B-Instruct")
+            with patch("obs.capture_for_vision", return_value=(
+                    Image.new("RGB", (32, 24), "white"), (0, 0), (32, 24))):
+                dec, _ = pl.next_action("abra amazon", "Chrome", [], [])
+            self.assertEqual(dec.type, "hotkey")
+            payload = seen[0]
+            content = payload["messages"][1]["content"]
+            self.assertEqual(content[0]["type"], "text")
+            self.assertEqual(content[1]["type"], "image_url")
+            self.assertTrue(content[1]["image_url"]["url"].startswith(
+                "data:image/jpeg;base64,"))
+            self.assertEqual(payload["model"], "Qwen3-VL-2B-Instruct")
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
 
 # --- vocaela -----------------------------------------------------------------
 class TestVocaelaParse(unittest.TestCase):
@@ -249,7 +272,8 @@ class TestVocaelaAdapter(unittest.TestCase):
 class TestConfig(unittest.TestCase):
     def test_defaults_2_modelos(self):
         cfg = cfgmod.load("nao-existe.json")
-        self.assertEqual(cfg["planner"]["model"], "MiniCPM5-1B")
+        self.assertEqual(cfg["profile"], "B1")
+        self.assertEqual(cfg["planner"]["model"], "MiniCPM5-2B")
         self.assertEqual(cfg["vision"]["model"], "Vocaela-2-500M-1024R2")
         self.assertIn("8091", cfg["planner"]["base_url"])
         self.assertIn("8082", cfg["vision"]["base_url"])
@@ -371,6 +395,70 @@ class TestVocaelaHistory(unittest.TestCase):
         finally:
             srv.shutdown()
             srv.server_close()
+
+
+class TestQwenGrounding(unittest.TestCase):
+    def test_parse_json_xy(self):
+        va = vocaela.parse_qwen_grounding('{"x": 0.5, "y": 0.25}')
+        self.assertEqual((va.type, va.x, va.y), ("click", 0.5, 0.25))
+
+    def test_parse_coordinate_array(self):
+        va = vocaela.parse_qwen_grounding(
+            '{"coordinate": [0.2, 0.8]}')
+        self.assertEqual((va.x, va.y), (0.2, 0.8))
+
+    def test_parse_lista_pura(self):
+        va = vocaela.parse_qwen_grounding('[0.1, 0.9]')
+        self.assertEqual((va.x, va.y), (0.1, 0.9))
+
+    def test_alvo_ausente_erro_honesto(self):
+        with self.assertRaises(ValueError):
+            vocaela.parse_qwen_grounding('{"x": null, "y": null}')
+
+    def test_fora_de_range_rejeita(self):
+        with self.assertRaises(ValueError):
+            vocaela.parse_qwen_grounding('{"x": 53, "y": 0.5}')
+
+    def test_adapter_envia_grounding_json(self):
+        srv, seen = _make_server('{"x": 0.4, "y": 0.6}')
+        try:
+            base = f"http://127.0.0.1:{srv.server_port}/v1"
+            ad = vocaela.QwenGroundingAdapter(base_url=base)
+            va, _ = ad.act_sync(Image.new("RGB", (50, 50), "white"),
+                                "Click the Continue shopping button")
+            self.assertEqual((va.type, va.x, va.y), ("click", 0.4, 0.6))
+            payload = seen[0]
+            blob = json.dumps(payload["messages"])
+            self.assertIn("grounding", blob.lower())
+            self.assertNotIn("<Action>", blob)
+            self.assertIn("Continue shopping", blob)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_unified_system_tem_regras_explicitas(self):
+        # Run U1 20/09: "same as textual" era ignorado; regra precisa estar
+        # escrita por extenso no system unificado.
+        self.assertIn("NEVER emit open_app", planner.UNIFIED_SYSTEM)
+        self.assertIn("Continue shopping", planner.UNIFIED_SYSTEM)
+        self.assertIn("0..1 in THAT frame", planner.UNIFIED_SYSTEM)
+
+    def test_build_adapters_qwen_usa_grounding(self):
+        from model_adapters import build_adapters
+
+        cfg = {"profile": "U1",
+               "planner": {"model": "Qwen3-VL-2B-Instruct"},
+               "vision": {"model": "Qwen3-VL-2B-Instruct"},
+               "screenshot_max_width": 1024}
+        p, v, prof = build_adapters(cfg)
+        self.assertEqual(type(p).__name__, "QwenVLPlanner")
+        self.assertEqual(type(v).__name__, "QwenGroundingAdapter")
+        cfg2 = {"profile": "B1",
+                "planner": {"model": "MiniCPM5-2B"},
+                "vision": {"model": "Vocaela-2-500M-1024R2"},
+                "screenshot_max_width": 1024}
+        _, v2, _ = build_adapters(cfg2)
+        self.assertEqual(type(v2).__name__, "VocaelaAdapter")
 
 
 if __name__ == "__main__":

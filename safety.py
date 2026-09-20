@@ -72,3 +72,33 @@ def status() -> dict:
 
 def stop() -> None:
     _stop.set()
+    # F2: cancelamento libera teclas/botões pressionados (best-effort).
+    try:
+        import actions as _act
+
+        _act.release_all()
+    except Exception:
+        pass
+
+
+# --- executor único F2: um único controlador de mouse/teclado por vez --------
+_exec_lock = threading.Lock()
+_exec_owner: str | None = None
+
+
+def acquire_executor(owner: str = "loop") -> bool:
+    """Um único executor por vez; False = outro já controla (não roubar)."""
+    global _exec_owner
+    ok = _exec_lock.acquire(blocking=False)
+    if ok:
+        _exec_owner = owner
+    return ok
+
+
+def release_executor() -> None:
+    global _exec_owner
+    _exec_owner = None
+    try:
+        _exec_lock.release()
+    except RuntimeError:
+        pass

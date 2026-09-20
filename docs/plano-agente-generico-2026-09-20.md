@@ -360,7 +360,8 @@ de GPU ao processo sem evidência.
 
 ## 9. Checklist vigente
 
-- [ ] R0: diagnóstico reproduzível e avaliação corrigida.
+- [x] R0: diagnóstico reproduzível e avaliação corrigida (20/09; ver
+  `docs/relatorio-r0-r3-2026-09-20.md`).
 - [ ] R1: memória/contratos/conclusão integrados ao loop real.
 - [ ] R2: conteúdo visual/UIA e confirmação específica dos efeitos.
 - [ ] R3: modelos e base selecionados por evidência, ou inviabilidade reportada.

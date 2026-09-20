@@ -11,8 +11,13 @@
   não demonstravam funcionalidade end-to-end.
   Default atual **B1**; rollback explícito `--profile B0`. Não trocar default
   sem os gates novos. Matriz de 20/09 e revisão de 18/09 são históricas.
-  Existência de contratos/testes offline não prova integração: há memória não
-  enviada ao planner, done com evidência implícita e checkers a corrigir.
+  Existência de contratos/testes offline não prova integração. Em R0, memória
+  passou a ser enviada ao planner, done implícito foi removido e checkers foram
+  corrigidos; os gates end-to-end continuam pendentes.
+  R0 foi concluída em 20/09; relatório parcial:
+  `docs/relatorio-r0-r3-2026-09-20.md`. B1 falhou 0/3 no primeiro probe real
+  (repetiu ctrl+t); U1 passou 3/3, mas levou ~38 s aquecido em CPU-only.
+  Isso não muda o default nem aprova R3/R4/R5.
 - Produto: computer use local, rápido, para GPU a partir de **6 GB de VRAM**;
   entender pedidos, observar monitores/janelas e usar mouse/teclado reais.
   UIA localiza e informa; modo GUI não usa edição semântica invisível ou open_url.

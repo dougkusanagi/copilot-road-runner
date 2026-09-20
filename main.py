@@ -2,7 +2,7 @@
 
 Arquitetura de 2 modelos (config.json + runtime próprio server.py,
 que baixa e sobe tudo sozinho na 1ª vez):
-  planner MiniCPM5-1B  http://127.0.0.1:8091/v1  (texto, sem screenshots)
+  planner MiniCPM5-2B  http://127.0.0.1:8091/v1  (texto, sem screenshots)
   visão   Vocaela-2    http://127.0.0.1:8082/v1  (screenshot → ação visual)
 
 O Sandbox é só p/ testes dev (via scripts); nunca passar
@@ -70,7 +70,7 @@ def locate_only(target: str, cfg: dict) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Computer Use local (MiniCPM5-1B + Vocaela-2)")
+    ap = argparse.ArgumentParser(description="Computer Use local (MiniCPM5-2B + Vocaela-2)")
     ap.add_argument("instruction", nargs="?", default="", help="instrução do usuário")
     ap.add_argument("--config", default="config.json")
     ap.add_argument("--max-steps", type=int, default=None)
@@ -82,6 +82,12 @@ def main() -> None:
                     help='dry-run Vocaela: --locate "Click the address bar"')
     ap.add_argument("--no-runtime", action="store_true",
                     help="não sobe llama-server local (usa endpoints como estão)")
+    ap.add_argument("--profile", default="",
+                    help="perfil opt-in (ex.: B1 = planner MiniCPM5-2B, ~1,5 GB; "
+                         "baixa o GGUF na 1ª vez). Default: config.json (B0)")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="F0: bloqueia TODOS os efeitos (bootstrap/foco/teclado/CLI); "
+                         "só decide, sem clicar")
     ap.add_argument("--ui", action="store_true",
                     help="tray + janela Spotlight com ditado (requer: uv sync --extra ui)")
     args = ap.parse_args()
@@ -95,6 +101,14 @@ def main() -> None:
         cfg["vision"]["base_url"] = args.vision_url
     if args.no_runtime:
         cfg.setdefault("runtime", {})["auto_start"] = False
+    if args.profile:
+        try:
+            cfgmod.apply_profile(cfg, args.profile)
+        except ValueError as e:
+            print(e)
+            raise SystemExit(2)
+    if args.dry_run:
+        cfg["dry_run"] = True
 
     if args.self_test:
         import safety
@@ -104,6 +118,14 @@ def main() -> None:
         t0 = time.perf_counter()
         path, (w, h) = take_screenshot()
         dt = (time.perf_counter() - t0) * 1000
+        try:
+            import config as _cfgmod
+            import skills as _sk
+
+            prof = _cfgmod.profile_of(cfg)
+            nskills = len(_sk.list_skills())
+        except Exception:
+            prof, nskills = {"name": "B0"}, 0
         print(json.dumps({
             "ok": True,
             "screenshot": path,
@@ -112,6 +134,8 @@ def main() -> None:
             "cpu_pct": psutil.cpu_percent(interval=0.2),
             "mem_pct": psutil.virtual_memory().percent,
             "safety": safety.status(),
+            "profile": prof,
+            "skills": nskills,
             "config": cfg,
             "note": f"{safety.HOTKEY} aborta; dry-run sem cliques",
         }, indent=2))
@@ -144,7 +168,7 @@ def main() -> None:
         raise SystemExit(2)
 
     from loop import run
-    summary = run(instruction, cfg)
+    summary = run(instruction, cfg, dry_run=bool(cfg.get("dry_run", False)))
     print(json.dumps(summary, indent=2, ensure_ascii=False))
 
 

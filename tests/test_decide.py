@@ -6,6 +6,7 @@ Usa planner/vocaela fake + snapshot mockado (offline, sem GUI/modelos).
 
 Roda com: uv run python -m unittest discover -s tests -v
 """
+
 from __future__ import annotations
 
 import sys
@@ -48,10 +49,13 @@ class TestDecideStep(unittest.TestCase):
         # Navegação web é pela UI (open_app + teclado), sem teleporte p/ URL.
         self._patch_snapshot([], "Edge", None)
         dec, tm = loop.decide(
-            "abra o Edge e busque preco RTX 4060", 5, {"hist_labels": []}, CFG,
-            planner=_FakePlanner(PlannerDecision(type="open_app",
-                                                  app="msedge")),
-            vocaela=_NoVision())
+            "abra o Edge e busque preco RTX 4060",
+            5,
+            {"hist_labels": []},
+            CFG,
+            planner=_FakePlanner(PlannerDecision(type="open_app", app="msedge")),
+            vocaela=_NoVision(),
+        )
         self.assertEqual(dec.action.type, "open")
         self.assertEqual(dec.action.target, "msedge")
         self.assertEqual(dec.source, "planner")
@@ -61,9 +65,13 @@ class TestDecideStep(unittest.TestCase):
         # janela errada + step 0 → bootstrap open notepad.exe (sem focus real).
         self._patch_snapshot([], "Edge", None)
         dec, _ = loop.decide(
-            "abra o notepad", 0, {"hist_labels": []}, CFG,
+            "abra o notepad",
+            0,
+            {"hist_labels": []},
+            CFG,
             planner=_FakePlanner(PlannerDecision(type="done")),
-            vocaela=_NoVision())
+            vocaela=_NoVision(),
+        )
         self.assertEqual(dec.action.type, "open")
         self.assertEqual(dec.action.target, "notepad.exe")
 
@@ -71,22 +79,27 @@ class TestDecideStep(unittest.TestCase):
         # janela certa → bootstrap None, decisão nativa do planner passa direto.
         self._patch_snapshot([], "Bloco de Notas - Notepad", None)
         dec, _ = loop.decide(
-            "abra o notepad", 3, {"hist_labels": []}, CFG,
-            planner=_FakePlanner(PlannerDecision(type="type_text",
-                                                 text="Hello")),
-            vocaela=_NoVision())
+            "abra o notepad",
+            3,
+            {"hist_labels": []},
+            CFG,
+            planner=_FakePlanner(PlannerDecision(type="type_text", text="Hello")),
+            vocaela=_NoVision(),
+        )
         self.assertEqual(dec.action.type, "type")
         self.assertEqual(dec.action.text, "Hello")
 
     def test_uia_click_resolve_sem_vision(self):
-        items = [{"id": 0, "name": "Sete", "type": "Button",
-                  "bounds": [10, 10, 50, 50]}]
+        items = [{"id": 0, "name": "Sete", "type": "Button", "bounds": [10, 10, 50, 50]}]
         self._patch_snapshot(items, "Calculadora", (0, 0, 400, 400))
         dec, tm = loop.decide(
-            "na calculadora clique no Sete", 2, {"hist_labels": []}, CFG,
-            planner=_FakePlanner(PlannerDecision(type="uia_click",
-                                                 target="Sete")),
-            vocaela=_NoVision())
+            "na calculadora clique no Sete",
+            2,
+            {"hist_labels": []},
+            CFG,
+            planner=_FakePlanner(PlannerDecision(type="uia_click", target="Sete")),
+            vocaela=_NoVision(),
+        )
         self.assertEqual(dec.source, "uia")
         self.assertEqual((dec.action.x, dec.action.y), (30, 30))
         self.assertEqual(tm.get("vision_calls", 0), 0)
@@ -95,17 +108,37 @@ class TestDecideStep(unittest.TestCase):
         # guard 4: planner diz done sem ter feito nada -> last_error, não done
         self._patch_snapshot([], "Edge", None)
         with self.assertRaises(RuntimeError):
-            loop.decide("abra o Edge", 2, {"hist_labels": []}, CFG,
-                        planner=_FakePlanner(PlannerDecision(type="done")),
-                        vocaela=_NoVision())
+            loop.decide(
+                "abra o Edge",
+                2,
+                {"hist_labels": []},
+                CFG,
+                planner=_FakePlanner(PlannerDecision(type="done")),
+                vocaela=_NoVision(),
+            )
         with self.assertRaises(RuntimeError):
-            loop.decide("abra o Edge", 2, {"hist_labels": ["wait(300ms) => window 'Edge'"]},
-                        CFG, planner=_FakePlanner(PlannerDecision(type="done")),
-                        vocaela=_NoVision())
-        dec, _ = loop.decide("abra o Edge", 2,
-                             {"hist_labels": ["opened msedge => window 'Edge'"]}, CFG,
-                             planner=_FakePlanner(PlannerDecision(type="done")),
-                             vocaela=_NoVision())
+            loop.decide(
+                "abra o Edge",
+                2,
+                {"hist_labels": ["wait(300ms) => window 'Edge'"]},
+                CFG,
+                planner=_FakePlanner(PlannerDecision(type="done")),
+                vocaela=_NoVision(),
+            )
+        import state as statemod
+
+        evidence = "obs-step-2: window='Edge'; ui=(sem elementos expostos)"
+        dec, _ = loop.decide(
+            "abra o Edge",
+            2,
+            {
+                "hist_labels": ["opened msedge => window 'Edge'"],
+                "task_state": statemod.init("abra o Edge"),
+            },
+            CFG,
+            planner=_FakePlanner(PlannerDecision(type="done", evidences=[evidence])),
+            vocaela=_NoVision(),
+        )
         self.assertEqual(dec.action.type, "done")
 
     def test_observe_e_done_allowed(self):
@@ -133,9 +166,13 @@ class TestDecideStep(unittest.TestCase):
     def test_answer_do_planner_vira_action(self):
         self._patch_snapshot([], "Amazon.com", None)
         dec, _ = loop.decide(
-            "qual o preço da rtx 5090", 3, {"hist_labels": ["type(rtx 5090) => window 'Amazon'"]},
-            CFG, planner=_FakePlanner(PlannerDecision(type="answer", text="R$ 12.499")),
-            vocaela=_NoVision())
+            "qual o preço da rtx 5090",
+            3,
+            {"hist_labels": ["type(rtx 5090) => window 'Amazon'"]},
+            CFG,
+            planner=_FakePlanner(PlannerDecision(type="answer", text="R$ 12.499")),
+            vocaela=_NoVision(),
+        )
         self.assertEqual(dec.action.type, "answer")
         self.assertEqual(dec.action.text, "R$ 12.499")
         self.assertEqual(dec.source, "planner")
@@ -143,16 +180,16 @@ class TestDecideStep(unittest.TestCase):
     def test_observe_pagina_de_erro_diz_pra_voltar(self):
         from schemas import Action
 
-        o = loop.observe(Action(type="open", target="chrome"),
-                         "PowerShell", "Page Not Found - Brave")
+        o = loop.observe(
+            Action(type="open", target="chrome"), "PowerShell", "Page Not Found - Brave"
+        )
         self.assertIn("ERROR page", o)
         self.assertIn("do NOT retry the same URL", o)
 
     def test_observe_pagina_ok_sem_hint_de_erro(self):
         from schemas import Action
 
-        o = loop.observe(Action(type="open", target="chrome"),
-                         "PowerShell", "Amazon.com")
+        o = loop.observe(Action(type="open", target="chrome"), "PowerShell", "Amazon.com")
         self.assertNotIn("ERROR page", o)
 
     def test_observe_app_ja_ativo_manda_agir_dentro(self):
@@ -160,8 +197,7 @@ class TestDecideStep(unittest.TestCase):
 
         # run real 19/09: open(chrome) com 'Google Chrome' parado no seletor
         # de perfil; "no window change yet" virava loop de reabrir.
-        o = loop.observe(Action(type="open", target="chrome"),
-                         "Google Chrome", "Google Chrome")
+        o = loop.observe(Action(type="open", target="chrome"), "Google Chrome", "Google Chrome")
         self.assertIn("already active", o)
         self.assertIn("INSIDE", o)
         self.assertNotIn("no window change yet", o)
@@ -169,14 +205,89 @@ class TestDecideStep(unittest.TestCase):
     def test_observe_focus_miss_mantem_sem_mudanca(self):
         from schemas import Action
 
-        o = loop.observe(Action(type="focus", target="bloco de notas"),
-                         "Edge", "Edge")
+        o = loop.observe(Action(type="focus", target="bloco de notas"), "Edge", "Edge")
         self.assertIn("no window change yet", o)
 
     def test_receita_cobre_seletor_de_perfil(self):
         import planner
 
         self.assertIn("profile/welcome/first-run picker", planner.PLANNER_SYSTEM)
+
+    def test_observe_hotkey_conhecida_nao_e_falha(self):
+        from schemas import Action
+
+        # Run 20/09: ctrl+l válido era lido como "wrong combo" porque o título
+        # não muda em tecla de foco — isso confundia o planner.
+        o = loop.observe(
+            Action(type="hotkey", key="ctrl+l"),
+            "Amazon.com - Google Chrome",
+            "Amazon.com - Google Chrome",
+        )
+        self.assertIn("expected for hotkey", o)
+        self.assertNotIn("wrong combos", o)
+
+    def test_observe_hotkey_desconhecida_aponta_receita(self):
+        from schemas import Action
+
+        o = loop.observe(Action(type="hotkey", key="ctrl+alt+n"), "N", "N")
+        self.assertIn("wrong combos", o)
+        self.assertIn("ctrl+t", o)
+
+    def test_prompt_intersticial_e_uia_pobre(self):
+        import planner
+
+        blob = planner.PLANNER_SYSTEM
+        self.assertIn("Continue shopping", blob)
+        self.assertIn("that sub-goal is DONE", blob)
+        p = planner.build_prompt(
+            "abra o chrome",
+            "Amazon.com - Google Chrome",
+            ["Button:Minimizar", "Button:Fechar", "Window:Amazon.com"],
+            ["hotkey(ctrl+t) => window 'A' -> 'B'"],
+        )
+        self.assertIn("visual_action", p)
+
+    def test_guard_browser_ativo_manda_avancar(self):
+        # Guarda anti-reabertura: mensagem genérica (não só ctrl+l) + avanço
+        # de sub-objetivo + intersticial. Mocka planner p/ open_app com Chrome
+        # já ativo e confere o last_error via exceção.
+        items: list = []
+        orig = loop.active_window_snapshot
+        loop.active_window_snapshot = lambda: (items, "Amazon.com - Google Chrome", None)
+        self.addCleanup(lambda: setattr(loop, "active_window_snapshot", orig))
+
+        class _P:
+            def next_action(
+                self,
+                goal,
+                window,
+                ui_names,
+                history,
+                last_error="",
+                skills_catalog="",
+                skill_context="",
+            ):
+                from planner import PlannerDecision
+
+                return PlannerDecision(type="open_app", app="chrome"), 1.0
+
+        class _V:
+            def act_sync(self, img, instruction, history=None):
+                raise AssertionError("sem visão aqui")
+
+        with self.assertRaises(RuntimeError) as cm:
+            loop.decide(
+                "abra o chrome e pesquise",
+                1,
+                {"hist_labels": []},
+                {"screenshot_max_width": 1024},
+                planner=_P(),
+                vocaela=_V(),
+            )
+        msg = str(cm.exception)
+        self.assertIn("CUMPRIDA", msg)
+        self.assertIn("Continue shopping", msg)
+        self.assertIn("uia_click", msg)
 
 
 if __name__ == "__main__":

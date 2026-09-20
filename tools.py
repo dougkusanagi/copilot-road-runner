@@ -59,8 +59,60 @@ def _launch(exe: str) -> None:
         subprocess.Popen([exe], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+_BROWSER_SUFFIXES = (
+    " - google chrome", " — google chrome", " – google chrome",
+    " - microsoft edge", " — microsoft edge", " – microsoft edge",
+    " - brave", " — brave", " – brave",
+)
+
+
+def _page_part(title_lower: str) -> str:
+    """Título sem o sufixo do navegador ("... - Google Chrome").
+
+    Puro, testável. Evita que focus("Google") case com QUALQUER aba do
+    Chrome (todas terminam no sufixo) — foi o loop do run de 19/09.
+    """
+    for suf in _BROWSER_SUFFIXES:
+        if title_lower.endswith(suf):
+            return title_lower[: -len(suf)].strip()
+    return title_lower.strip()
+
+
+# Consulta que nomeia o APP (não a página): pode casar no título cheio,
+# incluindo o sufixo. Qualquer outra consulta só vale na parte da página.
+_APP_TOKENS = frozenset(
+    list(APP_COMMANDS) + ["google chrome", "microsoft edge", "msedge"]
+)
+
+
+def _match_score(title_lower: str, query: str) -> int:
+    """3 exato, 2 prefixo, 1 palavra, 0 substring fraca, -1 sem match."""
+    page = _page_part(title_lower)
+    if not query or not page:
+        return -1
+    if page == query:
+        return 3
+    if page.startswith(query):
+        return 2
+    import re
+
+    if re.search(r"(^|\W)" + re.escape(query) + r"(\W|$)", page):
+        return 1
+    if query in page:
+        return 0
+    if query in _APP_TOKENS and query in title_lower:
+        return 0  # ex.: focus("chrome") com Chrome aberto (qualquer aba)
+    return -1
+
+
 def focus_window(title_substr: str, timeout: float = 3.0) -> bool:
-    """Traz janela p/ frente por substring do título. Aceita alternativas com '||'."""
+    """Traz janela p/ frente por substring do título. Aceita alternativas com '||'.
+
+    Estrito (F2): a consulta casa na PARTE DA PÁGINA (sem o sufixo
+    "- Google Chrome"); só nome de app (chrome, edge...) casa no título
+    cheio. Ranking: exato > prefixo > palavra > substring; desempate
+    prefere aba nova/documento novo.
+    """
     from pywinauto import Desktop
 
     from overlay import is_overlay_title
@@ -70,21 +122,27 @@ def focus_window(title_substr: str, timeout: float = 3.0) -> bool:
     desk = Desktop(backend="uia")
     while time.perf_counter() - t0 < timeout:
         try:
-            matches = []
+            scored = []
             for w in desk.windows(top_level_only=True, visible_only=True):
                 try:
                     title = w.window_text() or ""
                     if is_overlay_title(title):
                         continue  # nunca focar a própria borda "controlado"
-                    if any(a in title.lower() for a in alts):
-                        matches.append((title, w))
+                    low = title.lower()
+                    best = max((_match_score(low, a) for a in alts),
+                               default=-1)
+                    if best >= 0:
+                        scored.append((best, title, w))
                 except Exception:
                     continue
-            if matches:
-                # prefere documento novo/untitled (não digita em doc do usuário)
-                matches.sort(key=lambda tw: 0 if any(
-                    k in tw[0].lower() for k in ("sem t", "untitled")) else 1)
-                matches[0][1].set_focus()
+            if scored:
+                # melhor match; desempate prefere aba/documento novo
+                # (nova guia/untitled: não digita em doc do usuário)
+                scored.sort(key=lambda t: (
+                    -t[0], 0 if any(k in t[1].lower() for k in (
+                        "sem t", "untitled", "new tab", "nova guia",
+                        "nova aba")) else 1))
+                scored[0][2].set_focus()
                 time.sleep(0.4)
                 return True
         except Exception:
@@ -92,23 +150,32 @@ def focus_window(title_substr: str, timeout: float = 3.0) -> bool:
         time.sleep(0.5)
     # 2ª passada: janela pode estar minimizada (inclui ocultas + restore)
     try:
+        scored = []
         for w in desk.windows(top_level_only=True, visible_only=False):
             try:
                 title = w.window_text() or ""
                 if is_overlay_title(title):
                     continue
-                if not any(a in title.lower() for a in alts):
+                low = title.lower()
+                best = max((_match_score(low, a) for a in alts), default=-1)
+                if best < 0:
                     continue
-                try:
-                    w.restore()
-                    time.sleep(0.4)
-                except Exception:
-                    pass
-                w.set_focus()
-                time.sleep(0.4)
-                return True
+                scored.append((best, title, w))
             except Exception:
                 continue
+        if scored:
+            scored.sort(key=lambda t: (
+                -t[0], 0 if any(k in t[1].lower() for k in (
+                    "sem t", "untitled", "new tab", "nova guia",
+                    "nova aba")) else 1))
+            try:
+                scored[0][2].restore()
+                time.sleep(0.4)
+            except Exception:
+                pass
+            scored[0][2].set_focus()
+            time.sleep(0.4)
+            return True
     except Exception:
         pass
     return False

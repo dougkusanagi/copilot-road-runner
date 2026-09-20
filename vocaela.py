@@ -278,25 +278,122 @@ class VocaelaAdapter:
             "max_tokens": 128,
         }
         t0 = time.perf_counter()
-        data: dict | None = None
-        last_err: Exception | None = None
-        for attempt in range(3):  # §5.6: retry curto p/ slot ocupado/timeout
-            try:
-                with httpx.Client(timeout=self.timeout_s) as c:
-                    r = c.post(f"{self.base_url}/chat/completions", json=payload)
-                    r.raise_for_status()
-                    data = r.json()
-                break
-            except Exception as e:
-                last_err = e
-                retryable = isinstance(e, httpx.TimeoutException) or (
-                    isinstance(e, httpx.HTTPStatusError)
-                    and e.response is not None and e.response.status_code >= 500)
-                if not retryable or attempt == 2:
-                    break
-                time.sleep(0.5 * (attempt + 1))
-        if data is None:
-            raise RuntimeError(f"vocaela HTTP falhou: {last_err}")
+        try:
+            # F6: pool persistente + cancelamento; retries só-HTTP.
+            import http_pool as _pool
+
+            data, _ms = _pool.post_json(self.base_url, "/chat/completions",
+                                        payload, self.timeout_s, retries=2)
+        except RuntimeError as e:
+            raise RuntimeError(f"vocaela HTTP falhou: {e}")
         ms = (time.perf_counter() - t0) * 1000
         content = data["choices"][0]["message"]["content"]
         return parse_vocaela_output(content), ms
+
+
+QWEN_GROUNDING_SYSTEM = """You are a UI grounding model. Locate the single UI element described by the user instruction on the screenshot.
+Return ONLY one JSON object, no markdown, no explanation: {"x": 0.5, "y": 0.5}
+x,y are relative coordinates 0..1 (0,0 = top-left, 1,1 = bottom-right) of the element CENTER.
+If the element is not visible, return {"x": null, "y": null}."""
+
+
+def parse_qwen_grounding(text: str) -> VisualAction:
+    """Parser do grounding JSON do Qwen (puro, testável).
+
+    Aceita {"x":0.5,"y":0.5}, {"coordinate":[x,y]} ou [x,y]. null/ausente =
+    alvo não visível (erro honesto, vira last_error em vez de clique no escuro).
+    """
+    t = text.strip()
+    t = re.sub(r"^```(?:json)?\s*|\s*```$", "", t).strip()
+    try:
+        d = json.loads(t)
+    except Exception:
+        m = re.search(r"\{[^{}]*\}|\[.*?\]", t, re.DOTALL)
+        if not m:
+            raise ValueError(f"Qwen grounding inválido: {text[:200]!r}")
+        d = json.loads(m.group(0))
+    if isinstance(d, (list, tuple)) and len(d) == 2:
+        x, y = _coord(list(d), "coordinate")
+        return VisualAction(type="click", x=x, y=y)
+    if isinstance(d, dict):
+        if "coordinate" in d and d["coordinate"] is not None:
+            x, y = _coord(d["coordinate"], "coordinate")
+            return VisualAction(type="click", x=x, y=y)
+        x, y = d.get("x"), d.get("y")
+        if x is None or y is None:
+            raise ValueError(f"alvo não visível p/ o grounding: {text[:200]!r}")
+        x, y = _coord([x, y], "x/y")
+        return VisualAction(type="click", x=x, y=y)
+    raise ValueError(f"Qwen grounding inválido: {text[:200]!r}")
+
+
+class QwenGroundingAdapter:
+    """Grounding JSON p/ perfis Qwen (D1/D2/U1/U2). Mesma interface do Vocaela.
+
+    Motivo (run U1 20/09): apontar o VocaelaAdapter — com system message
+    `<Action>` do Vocaela — p/ um endpoint Qwen faz o modelo responder num
+    formato que o parser rejeita, após ~40s de inferência em CPU. Qwen entende
+    instrução JSON simples (capability structured_output do perfil); o parser
+    acima valida 0..1 sem inventar coordenada.
+    """
+
+    def __init__(self, base_url: str = "http://127.0.0.1:8082/v1",
+                 model: str = "Qwen3-VL-2B-Instruct",
+                 timeout_s: float = 180.0, max_long_edge: int = 1024):
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.timeout_s = timeout_s
+        self.max_long_edge = max_long_edge
+
+    def check(self) -> dict:
+        try:
+            r = httpx.get(f"{self.base_url}/models", timeout=10.0)
+            r.raise_for_status()
+            data = r.json()
+            return {"ok": True,
+                    "models": [m.get("id", "?") for m in data.get("data", [])]}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    async def act(self, screenshot: Image.Image | str,
+                  instruction: str,
+                  history: list[str] | None = None) -> tuple[VisualAction, float]:
+        return await asyncio.to_thread(self.act_sync, screenshot, instruction,
+                                       history)
+
+    def act_sync(self, screenshot: Image.Image | str,
+                 instruction: str,
+                 history: list[str] | None = None) -> tuple[VisualAction, float]:
+        """Retorna (VisualAction click 0..1, vision_ms)."""
+        if isinstance(screenshot, Image.Image):
+            b64, _ = _prep_image(screenshot, self.max_long_edge)
+        else:
+            b64 = str(screenshot)
+        user_text = f"Instruction: {instruction}\nReturn ONLY the JSON point."
+        if history:
+            seq = "\n".join(f"- {h[:120]}" for h in history[-3:])
+            user_text = (f"Recent actions:\n{seq}\n{user_text}")
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": QWEN_GROUNDING_SYSTEM},
+                {"role": "user", "content": [
+                    {"type": "text", "text": user_text},
+                    {"type": "image_url",
+                     "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                ]},
+            ],
+            "temperature": 0.0,
+            "max_tokens": 64,
+        }
+        t0 = time.perf_counter()
+        try:
+            import http_pool as _pool
+
+            data, _ms = _pool.post_json(self.base_url, "/chat/completions",
+                                        payload, self.timeout_s, retries=2)
+        except RuntimeError as e:
+            raise RuntimeError(f"qwen grounding HTTP falhou: {e}")
+        ms = (time.perf_counter() - t0) * 1000
+        content = data["choices"][0]["message"]["content"]
+        return parse_qwen_grounding(content), ms

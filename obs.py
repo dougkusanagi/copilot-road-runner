@@ -1,4 +1,11 @@
-"""Observação: screenshot rápida via mss + resize via Pillow."""
+"""Observação F2: screenshot rápida via mss + resize via Pillow.
+
+Coordenadas vinculadas ao frame (§4.2): Python transforma frame→desktop
+virtual uma única vez. Recorte/zoom tem transformação explícita; nunca
+reaproveitar pixels de imagem velha nem misturar bounds UIA com pixels
+redimensionados. `post_state` reutilizável enquanto válido (invalidado em
+escrita, troca de janela, modal, rolagem ou evento relevante).
+"""
 from __future__ import annotations
 
 import time
@@ -8,6 +15,9 @@ import mss
 from PIL import Image
 
 LAST_PNG = Path("last.png")
+
+# post_state compacto reutilizável (F2): válido até invalidação explícita.
+_post_state: dict = {"text": "", "valid": False, "reason": "empty"}
 
 
 def _grab_virtual() -> tuple[Image.Image, tuple[int, int]]:
@@ -86,6 +96,92 @@ def crop_to_rect(full: Image.Image, virtual_origin: tuple[int, int],
         if pr - pl >= 50 and pb - pt >= 50:
             return full.crop((pl, pt, pr, pb)), (pl + vx, pt + vy), (fw, fh)
     return full, (vx, vy), (fw, fh)
+
+
+def list_monitors() -> list[dict]:
+    """Monitores com posições negativas, DPI e z-order básico (F2, best-effort)."""
+    try:
+        with mss.mss() as sct:
+            mons = [{"index": i, "left": int(m["left"]), "top": int(m["top"]),
+                     "width": int(m["width"]), "height": int(m["height"])}
+                    for i, m in enumerate(sct.monitors[1:], start=1)]
+        try:
+            import ctypes
+
+            u = ctypes.windll.user32
+            dpi = u.GetDpiForSystem() if hasattr(u, "GetDpiForSystem") else 96
+            scale = float(dpi) / 96.0
+        except Exception:
+            scale = 1.0
+        for m in mons:
+            m["scale_dpi"] = scale
+        return mons
+    except Exception:
+        return []
+
+
+def capture_frame(max_long_edge: int = 1024,
+                  observation_id: str = "") -> tuple[Image.Image, object]:
+    """Captura + FrameRef vinculado (F2). Transformação explícita única."""
+    from schemas import FrameRef, new_id
+
+    full, (vx, vy) = _grab_virtual()
+    rect = _foreground_rect()
+    crop, origin, full_size = crop_to_rect(full, (vx, vy), rect)
+    try:
+        import ctypes
+
+        u = ctypes.windll.user32
+        dpi = u.GetDpiForSystem() if hasattr(u, "GetDpiForSystem") else 96
+        scale = float(dpi) / 96.0
+    except Exception:
+        scale = 1.0
+    try:
+        title = ""
+        import ctypes as _ct
+
+        h = _ct.windll.user32.GetForegroundWindow()
+        if h:
+            from pywinauto import Desktop
+
+            try:
+                title = Desktop(backend="uia").window(
+                    handle=int(h)).window_text() or ""
+            except Exception:
+                title = ""
+    except Exception:
+        title = ""
+    frame = FrameRef(frame_id=new_id("frm"), observation_id=observation_id,
+                     window_title=title[:120], origin=[int(origin[0]),
+                                                      int(origin[1])],
+                     scale_dpi=scale, size=[int(crop.size[0]),
+                                           int(crop.size[1])],
+                     captured_at=time.time())
+    _ = (max_long_edge, full_size, rect)
+    return crop, frame
+
+
+def frame_is_stale(frame: object, max_age_s: float = 5.0) -> bool:
+    """Pixels velhos nunca reaproveitados: idade > limite = stale."""
+    try:
+        age = time.time() - float(getattr(frame, "captured_at", 0.0))
+        return age > max_age_s
+    except Exception:
+        return True
+
+
+def set_post_state(text: str) -> None:
+    _post_state.update({"text": (text or "")[:300], "valid": True,
+                        "reason": "fresh"})
+
+
+def get_post_state() -> tuple[str, bool]:
+    return str(_post_state.get("text", "")), bool(_post_state.get("valid"))
+
+
+def invalidate_post_state(reason: str) -> None:
+    """Escrita, troca de janela, modal, rolagem ou evento relevante."""
+    _post_state.update({"valid": False, "reason": (reason or "event")[:120]})
 
 
 if __name__ == "__main__":

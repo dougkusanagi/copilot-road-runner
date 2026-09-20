@@ -5,6 +5,9 @@
 > Seguir somente o [novo plano R0–R6](docs/plano-agente-generico-2026-09-20.md),
 > ainda proposto. Testes offline não demonstram sucesso end-to-end;
 > a [matriz anterior](docs/matriz-avaliacao-2026-09-20.md) é histórica.
+> No [primeiro probe R0–R3](docs/relatorio-r0-r3-2026-09-20.md), B1 falhou
+> 0/3 e U1 passou 3/3 com ~38 s aquecido em CPU-only. O app ainda não está
+> aprovado para tarefas genéricas.
 
 Fluxo: instrução → planner MiniCPM5-2B (`:8091`, só texto, nunca recebe
 screenshot, nunca emite coordenadas) → UIA por nome (`pywinauto`) →

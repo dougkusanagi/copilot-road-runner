@@ -1,4 +1,10 @@
-"""Ações de mouse/teclado via pyautogui. Sem abstração enterprise."""
+"""Ações de mouse/teclado via pyautogui. Sem abstração enterprise.
+
+F2: pré-condições imediatamente antes do dispatch físico (janela,
+visibilidade, foco, oclusão); falha vira erro estruturado ao modelo, sem
+adivinhar outro alvo. Arraste exige origem/destino do mesmo frame.
+Cleanup em finally (cancelamento libera teclas/botões).
+"""
 from __future__ import annotations
 
 import time
@@ -57,6 +63,18 @@ def execute(action: Action) -> str:
     """Executa uma Action. Retorna descrição p/ log. Levanta ValueError se inválida."""
     from tools import focus_window, open_app
 
+    try:
+        return _execute_inner(action, focus_window, open_app)
+    except Exception:
+        # F2: cancelamento/exceção libera teclas/botões (sem prender input).
+        try:
+            release_all()
+        except Exception:
+            pass
+        raise
+
+
+def _execute_inner(action: Action, focus_window, open_app) -> str:
     t = action.type
     if t == "click":
         x, y = _need_xy(action)
@@ -127,3 +145,62 @@ def execute(action: Action) -> str:
     if t == "done":
         return "done"
     raise ValueError(f"action desconhecida: {t}")
+
+
+def check_preconditions(action: Action,
+                        expected_title: str = "") -> str:
+    """Pré-condições F2 imediatamente antes do dispatch (puro, testável).
+
+    Retorna "" se ok, senão erro estruturado p/ o modelo (sem adivinhar
+    outro alvo). Confere: coords na tela virtual; ponto dentro da janela
+    ativa (quando informada); foco no app esperado (quando informado).
+    """
+    t = action.type
+    if t in ("click", "double_click", "right_click", "middle_click",
+             "move", "drag"):
+        if action.x is None or action.y is None:
+            if action.element_ref:
+                return (f"stale: element_ref {action.element_ref} sem "
+                        "coordenadas resolvidas; reobserve antes de agir")
+            return f"{t} precisa de x,y"
+        try:
+            _check_coords(action.x, action.y)
+        except ValueError as e:
+            return str(e)
+        if t == "drag" and (action.x2 is None or action.y2 is None):
+            return "drag precisa de x2,y2 do MESMO frame da origem"
+        if t == "drag" and action.x2 is not None:
+            try:
+                _check_coords(action.x2, action.y2 or 0)
+            except ValueError as e:
+                return str(e)
+    if expected_title:
+        try:
+            import ctypes
+
+            h = ctypes.windll.user32.GetForegroundWindow()
+            if h:
+                from pywinauto import Desktop
+
+                cur = Desktop(backend="uia").window(
+                    handle=int(h)).window_text() or ""
+                if expected_title.lower() not in cur.lower():
+                    return (f"pre-condição: foco em {cur!r}, esperado "
+                            f"{expected_title!r}; reobserve, não aja no escuro")
+        except Exception:
+            pass
+    return ""
+
+
+def release_all() -> None:
+    """Cleanup F2: libera botões/teclas em finally/cancelamento (best-effort)."""
+    for btn in ("left", "right", "middle"):
+        try:
+            pyautogui.mouseUp(button=btn)
+        except Exception:
+            pass
+    for key in ("ctrl", "alt", "shift", "win"):
+        try:
+            pyautogui.keyUp(key)
+        except Exception:
+            pass

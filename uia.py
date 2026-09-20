@@ -1,4 +1,10 @@
-"""Windows UI Automation via pywinauto (backend uia). Rápido e podado."""
+"""Windows UI Automation via pywinauto (backend uia). Rápido e podado.
+
+F2: alvos por ID/frame (§4.2–4.3). `snapshot()` devolve `Observation` com
+`ElementRef`s vinculados (observation_id + element_id; IDs nunca
+reutilizados entre snapshots). `active_window_snapshot()` legado é
+compatível e delega p/ o novo caminho.
+"""
 from __future__ import annotations
 
 import time
@@ -159,3 +165,58 @@ def active_window_snapshot(timeout: float = 5.0,
         return items, title, wrect
     except Exception:
         return [], "", None
+
+
+def snapshot(timeout: float = 5.0, max_elements: int = 120) -> object:
+    """Snapshot F2 vinculado: Observation com ElementRefs + cobertura.
+
+    IDs são índices do snapshot atual + observation_id único; nunca
+    reutilizar refs entre snapshots (stale -> erro estruturado, não clique).
+    Ausência em lista truncada NÃO significa inexistência na UIA.
+    """
+    from schemas import ElementRef, Observation, new_id
+
+    items, title, wrect = active_window_snapshot(
+        timeout=timeout, max_elements=max_elements)
+    obs_id = new_id("obs")
+    refs = []
+    for it in items:
+        refs.append(ElementRef(
+            observation_id=obs_id, element_id=int(it.get("id", 0)),
+            role=str(it.get("type", "?")), name=str(it.get("name", "")),
+            context=str(it.get("context", "") or title[:80]),
+            value=str(it.get("value", "") or "")[:200],
+            state=str(it.get("state", "") or ""),
+            bounds=list(it.get("bounds") or [0, 0, 0, 0])))
+    truncated = len(refs) >= max_elements
+    return Observation(
+        observation_id=obs_id, app=title, focus=title,
+        uia=refs,
+        coverage=(f"{len(refs)}/{max_elements} elementos; "
+                  + ("TRUNCADO: ausência na lista não prova inexistência; "
+                      "peça expansão de ramo/região." if truncated
+                      else "lista completa do snapshot.")),
+        truncated=truncated)
+
+
+def resolve_ref(items: list[dict], ref: str,
+                observation_id: str) -> dict | None:
+    """Resolve alvo por ID da observação (F2). Stale -> None.
+
+    `ref` = "<observation_id>#<element_id>". observation_id diferente da
+    atual = estado obsoleto (nunca clicar por nome adivinhado).
+    """
+    try:
+        oid, _, eid = ref.partition("#")
+        if oid != observation_id or not eid.lstrip("-").isdigit():
+            return None
+        want = int(eid)
+    except Exception:
+        return None
+    for it in items:
+        try:
+            if int(it.get("id", -1)) == want:
+                return it
+        except Exception:
+            continue
+    return None

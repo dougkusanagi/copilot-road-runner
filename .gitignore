@@ -6,6 +6,9 @@ last.png
 overlay_proof*.png
 run.jsonl
 run-*/
+runs/
+prefs.json
+evals/__pycache__/
 config.sandbox.json
 sandbox/crr.local.wsb
 sandbox/crr-agent.local.wsb
