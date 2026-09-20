@@ -1,11 +1,12 @@
 # copilot-road-runner — Computer Use local MVP (Windows)
 
-> Este README descreve a implementação atual. A evolução para GPUs a partir de
-> 6 GB, skills e comparação de modelos está no
-> [plano vigente de refatoração](docs/plano-refatoracao-2026-09-19.md)
-> (planejado, ainda não implementado).
+> MVP experimental: confiabilidade em tarefas genéricas ainda não validada.
+> Default **B1** (MiniCPM5-2B); rollback explícito `--profile B0`.
+> Seguir somente o [novo plano R0–R6](docs/plano-agente-generico-2026-09-20.md),
+> ainda proposto. Testes offline não demonstram sucesso end-to-end;
+> a [matriz anterior](docs/matriz-avaliacao-2026-09-20.md) é histórica.
 
-Fluxo: instrução → planner MiniCPM5-1B (`:8091`, só texto, nunca recebe
+Fluxo: instrução → planner MiniCPM5-2B (`:8091`, só texto, nunca recebe
 screenshot, nunca emite coordenadas) → UIA por nome (`pywinauto`) →
 Vocaela-2 (`:8082`, screenshot → ação visual 0..1, só quando o elemento
 não está na accessibility tree) → `pyautogui` → observa → repete.
@@ -22,7 +23,7 @@ uv run ruff check  # lint (dev-deps)
 
 Runtime próprio (sem depender de `llama-server` externo): na 1ª execução
 o loop baixa o binário (`llama.cpp` Windows x64 CPU) + os GGUFs
-(MiniCPM5-1B-Q4_K_M ~657 MB, Vocaela-2-Q8_0 + mmproj ~534 MB) para
+(MiniCPM5-2B-Q4_K_M ~1,5 GB, Vocaela-2-Q8_0 + mmproj ~534 MB) para
 `models/` (gitignored) e sobe planner em `:8091` + visão em `:8082` —
 portas fora do padrão, sem conflito com Ollama (`11434`) nem LM Studio
 (`1234`). Nas seguintes, só reusa. Endpoint já vivo na porta é
@@ -38,8 +39,8 @@ Normalmente você não precisa disso (`main.py` baixa e sobe sozinho).
 Para subir na mão ou expor ao Sandbox:
 
 ```powershell
-# planner MiniCPM5-1B em :8091 (--jinja: template oficial do MiniCPM5)
-.\models\bin\llama-server.exe -m .\models\MiniCPM5-1B-Q4_K_M.gguf `
+# planner MiniCPM5-2B em :8091 (--jinja: template oficial do MiniCPM5)
+.\models\bin\llama-server.exe -m .\models\MiniCPM5-2B-Q4_K_M.gguf `
   --host 127.0.0.1 --port 8091 -c 4096 --jinja
 
 # visão Vocaela-2 em :8082 (--mmproj obrigatório p/ imagem)
@@ -67,12 +68,50 @@ uv run python main.py --locate "Click the address bar"
 
 # end-to-end (comece com --max-steps 4; não use o PC enquanto roda)
 uv run python main.py "abra o Edge e busque preço RTX 4060" --max-steps 4
+
+# perfil B0 (rollback): planner MiniCPM5-1B no lugar do 2B
+uv run python main.py "abra o chrome e pesquise o preço da rtx 5090 na amazon" --max-steps 10 --profile B0
+# default é B1; sem --profile já usa o 2B
+
+# perfil U1: um unico Qwen3-VL-2B (modelo + projetor baixados na primeira vez)
+uv run python main.py "abra o chrome, abra uma nova aba e pesquise o preco da rtx 5090 na amazon" --profile U1 --max-steps 10
 ```
 
 ```bash
 # suite oficial (sempre via uv)
 uv run python -m unittest discover -s tests
 ```
+
+## Histórico da implementação anterior (não é o plano vigente)
+
+Inventário de módulos, não comprovação de integração ou qualidade. As alegações
+abaixo precisam da auditoria R0: memória, verificação e checkers ainda têm lacunas.
+
+- **F0 baseline:** `evals/tasks.json` (20 tarefas), `evals/runner.py`
+  (`--pilot --dry-run`, sem clicar no host), `telemetry.py` (GPU/driver/
+  backend/RAM/CPU/resolução/carga) e `runs/<id>/` (JSONL, summary,
+  config/revisões, timings, decisões, evidências; gitignored). `--dry-run`
+  bloqueia TODOS os efeitos (bootstrap/foco/teclado/CLI).
+- **F1 contratos:** `schemas.py` (Observation/ElementRef/FrameRef/TaskState/
+  Decision/ActionResult/Completion), `state.py` (fato ≠ hipótese),
+  `config.profile` + `PROFILES` (B0..E2); confianças fictícias 0,9/0,8
+  removidas (None = não calibrada).
+- **F2 vínculo:** alvos UIA por `observation_id#element_id` (stale veta),
+  `obs.capture_frame` + `FrameRef`, `post_state` reutilizável/invalidável,
+  `actions.check_preconditions` + `release_all`, executor único em `safety`.
+- **F3 memória/verificação:** `verification.py` (efeito específico, espera
+  condicional cancelável, done com evidências vetado), prompts por papel
+  (textual + `build_unified_prompt`), anti-loop ação+estado+efeito,
+  orçamentos separados (ações/decisões/retries/tempo).
+- **F4 perfis:** `model_adapters.py` (capacidades, unificado = 1 processo,
+  smoke tests, orçamento 6 GB), `server.ensure_servers_for_profile` +
+  `gpu_status` + `record_manifest`. Rollback explícito: `--profile B0`.
+- **F5 skills:** `skills.py` (catálogo compacto → skill do modelo →
+  referências) + `skills/` (`computer-use`, `browser-gui`, `text-editing`,
+  `blender-cli` piloto com executor CLI restrito: argv, sem shell, cwd
+  delimitado, timeout, artefatos). `use_skill` no planner.
+- **F6 otimização:** `sequence` (≤3 primitivas teclado/espera, guardas entre
+  elas), `http_pool.py` (cliente persistente, cancelamento, retries só-HTTP).
 
 O Sandbox é **só para testes de desenvolvimento** e é acionado apenas
 pelos scripts (`.\scripts\Start-Sandbox.ps1` manual,

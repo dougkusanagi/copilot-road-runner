@@ -5,17 +5,22 @@
 
 ## Direção vigente e ordem de leitura
 
-- **Plano de evolução vigente:** [docs/plano-refatoracao-2026-09-19.md](docs/plano-refatoracao-2026-09-19.md).
-  Ler antes de refatorar. Suas fases estão planejadas, não implementadas.
-  A revisão de 18/09 é histórica; não executar seu roadmap como backlog atual.
+- **Único plano vigente:** [docs/plano-agente-generico-2026-09-20.md](docs/plano-agente-generico-2026-09-20.md).
+  Etapas **R0–R6 propostas, ainda não aprovadas**. Começar por R0; não continuar
+  as antigas fases F0–F7. O plano de 19/09 foi removido: os status de conclusão
+  não demonstravam funcionalidade end-to-end.
+  Default atual **B1**; rollback explícito `--profile B0`. Não trocar default
+  sem os gates novos. Matriz de 20/09 e revisão de 18/09 são históricas.
+  Existência de contratos/testes offline não prova integração: há memória não
+  enviada ao planner, done com evidência implícita e checkers a corrigir.
 - Produto: computer use local, rápido, para GPU a partir de **6 GB de VRAM**;
   entender pedidos, observar monitores/janelas e usar mouse/teclado reais.
   UIA localiza e informa; modo GUI não usa edição semântica invisível ou open_url.
 - Evoluir o código existente. Comparar perfil **duplo** (planner textual + visão)
-  e **unificado** (VLM que planeja e enxerga), conforme matriz e gates do plano.
+  e **unificado** (VLM que planeja e enxerga), conforme gates do novo plano.
   Não fixar dois modelos como requisito futuro nem trocar default sem benchmark.
   A proibição de screenshots/coordenadas no planner vale para o papel textual;
-  o perfil unificado planejado terá contrato visual vinculado ao frame.
+  o perfil unificado deve usar contrato visual vinculado ao frame.
 - Python observa/executa/veta; modelos escolhem ações, alvos, subobjetivos e skills.
   Memória de tarefa, IDs de observação/frame e confirmação de efeitos substituem
   heurísticas por app gradualmente, mantendo safety e testes durante a migração.
@@ -23,16 +28,17 @@
   explicitamente separados da GUI. Não habilitar shell arbitrário como fallback.
 - `empero-ai/Qwen3.8-2B-Distill` é candidato comunitário experimental, não um
   Qwen3.8-2B oficial com visão validada. Conferir pesos/projetor e suporte antes
-  de habilitá-lo como VLM; detalhes e fontes no plano.
+  de habilitá-lo como VLM; ver critérios de elegibilidade no plano vigente.
 - Uso normal continua local, runtime próprio, sem flagship/API obrigatório.
   Testes dev com cliques continuam exclusivamente no Sandbox; exceções de
   hardware não cobertas exigem ambiente de teste dedicado, nunca o desktop de trabalho.
 
-## Arquitetura implementada hoje (baseline de 2 modelos)
+## Inventário atual (baseline; não representa os gates do novo plano)
 
-- **Planner MiniCPM5-1B** (`:8091`, só texto, nunca recebe screenshot, nunca
+- **Planner MiniCPM5-2B** (`:8091`, só texto, nunca recebe screenshot, nunca
   emite coordenadas) → **Vocaela-2** (`:8082`, screenshot → ação visual 0..1)
-  → Python executa (tools, UIA, mouse/teclado) e NUNCA decide.
+  → Python executa (tools, UIA, mouse/teclado) e NUNCA decide. (B0 = 1B fica
+  como rollback via `--profile B0`.)
 - Ordem: `open/focus/type` (planner) → `uia_click` por NOME → Vocaela
   (só quando o elemento não está na accessibility tree).
 - Planner com `response_format: json_schema` (coordenadas impossíveis por
@@ -55,7 +61,7 @@
   shell. Sem teleporte p/ URL (`open_url` removido): navegar é pela UI do
   navegador (ctrl+l, digitar, enter, cliques), como um humano.
 - Revisão histórica: `docs/revisao-codebase-2026-09-18.md`.
-  Roadmap vigente: `docs/plano-refatoracao-2026-09-19.md`.
+  Roadmap vigente: `docs/plano-agente-generico-2026-09-20.md`.
 - **UI opcional** (`main.py --ui`, extra `ui`: `uv sync --extra ui`): `app.py`
   = tray (pystray, thread daemon) + janela Spotlight (pywebview/WebView2,
   thread principal) + hotkey `ui.hotkey` (`ctrl+alt+space`) + agente em
@@ -68,6 +74,17 @@
 - Arquivos-chave: `main.py` (CLI), `loop.py` (observe→decide→act→verify),
   `planner.py`, `vocaela.py`, `server.py` (runtime llama.cpp), `uia.py`,
   `actions.py`, `tools.py`, `safety.py`, `config.py`, `obs.py`.
+- Módulos anteriores (integração a auditar em R0): `telemetry.py` + `evals/` (runner dry-run) +
+  `runs/<id>/`; `schemas.py`/`state.py` (contratos, sem confidence fictícia);
+  `verification.py` (efeito específico, done com evidências);
+  `model_adapters.py` + `config.PROFILES` (B0..E2, unificado = 1 processo);
+  `skills.py` + `skills/` (4 skills, CLI restrito); `http_pool.py` +
+  `sequence` (≤3 primitivas). `--dry-run` bloqueia todos os efeitos.
+- Perfil U1 executavel: `--profile U1` usa somente Qwen3-VL-2B-Instruct
+  (GGUF Q4_K_M + mmproj F16) em um processo; o planner recebe screenshot em
+  toda decisao e o mesmo endpoint faz grounding via `QwenGroundingAdapter`
+  (JSON `{"x","y"}` 0..1, nunca `<Action>` do Vocaela). O runtime recusa
+  checkpoint diferente, sem fallback silencioso para MiniCPM.
 
 ## Comandos
 
@@ -76,6 +93,7 @@ uv run python -m unittest discover -s tests   # suite oficial (sempre via uv)
 uv run ruff check                             # lint (dev-deps do pyproject)
 uv run python main.py --self-test             # sem clicar em nada
 uv run python main.py "..." --max-steps 4     # uso real: local, sem parâmetros
+uv run python -m evals.runner --pilot --dry-run  # smoke, não valida tarefas
 ```
 
 Use **uv** — o python do sistema não tem as deps (`pyautogui` etc.).
@@ -106,7 +124,10 @@ cada abertura é um ambiente limpo descartável.
 - `type` usa `pywinauto.keyboard.send_keys` (Unicode); `pyautogui.typewrite`
   descarta acentos em silêncio no Windows.
 
-## Quirks descobertos (não redescobrir)
+## Quirks e correções históricas (não são backlog nem arquitetura obrigatória)
+
+Preservar descobertas de plataforma/safety. Heurísticas de estratégia por app
+abaixo são legado a substituir conforme o plano vigente, não regras a perpetuar.
 
 - Shell das ferramentas = **PowerShell 5.1**: sem `head`/`&&`; usar
   `Select-Object`, `;` ou `; if ($?) { }`.
@@ -150,9 +171,52 @@ cada abertura é um ambiente limpo descartável.
   próprio overlay → LOOP (run real 19/09). Janelas tituladas `crr-overlay`
   são ignoradas em `uia.snapshot` e `tools.focus` (`is_overlay_title`); exemplo
   do spec virou `Google` + regra anti-cópia no prompt; `focus` timeout 8s→3s.
+- Run real 19/09 (rtx 5090 na amazon): o 1B copiou o exemplo `focus("Google")`
+  e `focus_window` por substring casava QUALQUER aba do Chrome (todas terminam
+  em "- Google Chrome") → falso sucesso + loop; `use_skill` GUI virava
+  `wait(0ms)` executável → stall. Fixes: `tools.focus_window` casa na PARTE
+  DA PÁGINA (`_page_part` stripa o sufixo; só nome de app — chrome/edge… —
+  casa no título cheio) com ranking exato>prefixo>palavra; guarda anti-exemplo
+  veta `focus("Google")` fora de pedido com "google"; bootstrap cobre
+  chrome/edge/brave (`_browser_want`); skill GUI faz re-query com contexto em
+  vez de placeholder; `sequence` rejeita passo misto press_key+keys.
+- Run real 19/09 22:58 (amazon): ramo `sequence` em `_decide_planner` era
+  inalcançável (`_planner_to_action` devolvia `wait(0)` antes) → open_app
+  dentro de sequence executava placeholder sem validar; fix retorna None p/
+  sequence. Bootstrap abria janela NOVA do Chrome → seletor de perfil
+  ("Quem está usando?"); agora é focus-first (janela existente já está no
+  perfil certo; adivinhar entre perfis é sensível). Dúvida honesta virou
+  ação `ask` (human-in-the-loop, teto 3/run, timeout) + `prefs.json`
+  (gitignored: ex. `browser_profile` lembrado após 1ª resposta).
+- Run real 19/09 23:12 (amazon): 1B inventou `ctrl+alt+n` p/ nova aba
+  (correta: `ctrl+t`) e repetiu 5x sem efeito. Fixes: receita de hotkeys no
+  prompt/spec/skill (`ctrl+t` nova aba, `ctrl+l` endereço…); verify de
+  sequence observa as combinações (`_verify_action`) e diz "no visible
+  effect" + receita quando nada muda; `_repeat_note` cita o conteúdo da
+  sequence; logs mostram `sequence(...)` em vez de `wait("")`.
+- Runs reais 20/09 (rtx 5090, amazon "Continue shopping"): B1 avançou até
+  `Amazon.com` e travou; U1 (174s, 4 vetos) nem saiu do step 1 com
+  `planner_calls=0` no summary. Causas: (a) guarda browser-ativo dizia só
+  "ctrl+l, type_text e enter" — na página da Amazon o certo é dispensar o
+  intersticial via clique, não renavegar; (b) snapshot UIA do Chrome vinha
+  com só 6 itens (Minimizar/Restaurar/Fechar/Nova guia/Window/Pane), sem
+  conteúdo web — planner sem alvo redigitava URL; (c) `observe()` lia
+  `hotkey(ctrl+l)` sem mudança de título como "wrong combo", quando tecla
+  de foco NUNCA muda título; (d) `UNIFIED_SYSTEM` dizia só "same as textual"
+  e o Qwen ignorou a regra de não-reabrir; (e) veto pós-planner descartava
+  `tm`, escondendo custo/latência; (f) visão Qwen com system `<Action>` do
+  Vocaela = protocolo errado (~40s p/ falhar em CPU). Fixes: guarda genérica
+  (hotkey/type/uia_click/visual/sequence + "parte abrir CUMPRIDA" +
+  intersticial primeiro); prompt §§1c/3b/3c + hint "page content NOT in UI
+  elements → visual_action"; `observe()` neutro p/ teclas conhecidas
+  (ctrl+l/ctrl+t/…); `UNIFIED_SYSTEM` = núcleo textual por extenso + frame
+  0..1; `ctx._partial_tm` acumula custo no veto; `QwenGroundingAdapter`
+  (JSON `{"x","y"}`) via `build_adapters` p/ modelo com "qwen" (Vocaela segue
+  no B0/B1). U1 em CPU continua lento (~40s/chamada, binário CPU-only com
+  `ngl=0`): sem GPU não há milagre; medir antes de trocar default (R3/R5).
 
 ## Workflow de git
 
 - Commit + push a cada passo testável que valer (suite verde antes).
 - Ignorados: `config.sandbox.json`, `sandbox/crr*.wsb`, `.sandbox-job/`,
-  `last.png`, `run.jsonl`.
+  `last.png`, `run.jsonl`, `runs/`.

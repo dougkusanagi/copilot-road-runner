@@ -2,7 +2,7 @@
 
 > **Escopo:** este guia descreve os scripts e o baseline implementados hoje.
 > A evolução dos perfis de modelos e a bateria de avaliação estão no
-> [plano vigente de refatoração](plano-refatoracao-2026-09-19.md).
+> [plano vigente de refatoração](plano-agente-generico-2026-09-20.md).
 > Dois endpoints/modelos abaixo não são requisito do futuro perfil unificado.
 > Os modelos continuam na GPU do host e os cliques no Sandbox; não medir VRAM
 > pela GPU virtual do Sandbox nem executar testes de interação no host.

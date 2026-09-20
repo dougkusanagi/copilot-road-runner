@@ -1,7 +1,7 @@
 # Revisão da base de código e do plano — 18/09/2026
 
 > **DOCUMENTO HISTÓRICO — propostas substituídas em 19/09/2026.**
-> O [plano de refatoração vigente](plano-refatoracao-2026-09-19.md) é a fonte
+> O [plano de refatoração vigente](plano-agente-generico-2026-09-20.md) é a fonte
 > para arquitetura futura, modelos, prioridades e critérios de aceite. Este
 > relatório registra achados de uma versão anterior; vários já foram corrigidos.
 > As propostas abaixo NÃO são instruções para reimplementação. Em particular:
@@ -457,7 +457,7 @@ direção — o `ParseFile` do PowerShell e o `_render_wsb` → XML são o model
 
 ## 9. Roadmap histórico — não executar como plano vigente
 
-> Substituído por [fases F0–F7 do plano de 19/09](plano-refatoracao-2026-09-19.md).
+> Substituído pelas [etapas R0–R6 do plano de 20/09](plano-agente-generico-2026-09-20.md).
 > Status e estimativas abaixo são registros da época, não pendências atuais.
 
 > **Status (18/09, mesmo dia):** P0 C1–C7 e P1 C8–C15 implementados e commitados
