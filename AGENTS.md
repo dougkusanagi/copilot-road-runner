@@ -27,6 +27,14 @@
   `observation_ref` em toda decisão. Probes com modelos reais (≥30 cenas) e
   E2E Sandbox ficam p/ R3/R4. Próxima: R2 (percepção visual/OCR, UIA
   diagnosticável, confirmação específica).
+  R2 fatia 1 em 20/09 (252 verdes, `tests/test_r2_obs.py` + fixtures
+  `uia-vazia`/`modal-dialog`): UIA com diagnóstico (ok/provider_empty/
+  truncated/timeout_partial/no_window/error em `uia.LAST_DIAG`,
+  `Observation.error` e `tm["uia_diag"]`); alvo ambíguo recusado com
+  contextos (sem first-match); caminho visual com `FrameRef`/DPI e guarda
+  de frame obsoleto (janela/modal mudou → sem clique); anti-loop considera
+  resultado (`_loop_has_progress`). OCR local pendente (sem backend no
+  ambiente); expansão de ramo UIA e probes visuais ficam p/ próxima fatia.
 - Produto: computer use local, rápido, para GPU a partir de **6 GB de VRAM**;
   entender pedidos, observar monitores/janelas e usar mouse/teclado reais.
   UIA localiza e informa; modo GUI não usa edição semântica invisível ou open_url.

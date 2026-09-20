@@ -306,22 +306,23 @@ class TestResolveUia(unittest.TestCase):
     def test_exact(self):
         from loop import _resolve_uia
 
-        a = _resolve_uia(self.ITEMS, "Sete", (0, 0, 400, 400),
-                         state_title="Calculadora")
+        a, note = _resolve_uia(self.ITEMS, "Sete", (0, 0, 400, 400),
+                               state_title="Calculadora")
         self.assertIsNotNone(a)
+        self.assertEqual(note, "")
         self.assertEqual((a.x, a.y), (30, 30))
 
     def test_pula_chrome_e_janela(self):
         from loop import _resolve_uia
 
-        self.assertIsNone(_resolve_uia(self.ITEMS, "Minimizar", (0, 0, 400, 400)))
-        self.assertIsNone(_resolve_uia(self.ITEMS, "Calculadora", (0, 0, 400, 400),
-                                       state_title="Calculadora"))
+        self.assertEqual(_resolve_uia(self.ITEMS, "Minimizar", (0, 0, 400, 400)), (None, ""))
+        self.assertEqual(_resolve_uia(self.ITEMS, "Calculadora", (0, 0, 400, 400),
+                                      state_title="Calculadora"), (None, ""))
 
     def test_miss_fora_da_janela(self):
         from loop import _resolve_uia
 
-        self.assertIsNone(_resolve_uia(self.ITEMS, "Sete", (500, 500, 900, 900)))
+        self.assertEqual(_resolve_uia(self.ITEMS, "Sete", (500, 500, 900, 900)), (None, ""))
 
 
 class TestPlannerSchema(unittest.TestCase):

@@ -98,6 +98,44 @@ def crop_to_rect(full: Image.Image, virtual_origin: tuple[int, int],
     return full, (vx, vy), (fw, fh)
 
 
+def _system_dpi() -> float:
+    """Escala do sistema (96 DPI = 1.0). Best-effort, nunca levanta."""
+    try:
+        import ctypes
+
+        u = ctypes.windll.user32
+        dpi = u.GetDpiForSystem() if hasattr(u, "GetDpiForSystem") else 96
+        return float(dpi) / 96.0
+    except Exception:
+        return 1.0
+
+
+def frame_ref_for(
+    origin: tuple[int, int],
+    size_px: tuple[int, int],
+    title: str,
+    observation_id: str,
+) -> object:
+    """FrameRef vinculado a uma captura já feita (R2).
+
+    `origin` em coords de tela (pode ser negativo em multi-monitor),
+    `size_px` o tamanho da imagem cujas coords 0..1 o localizador usa.
+    Transformação explícita única: tela = origin + frac * size.
+    """
+    from schemas import FrameRef, new_id
+
+    w, h = int(size_px[0]), int(size_px[1])
+    return FrameRef(
+        frame_id=new_id("frm"),
+        observation_id=observation_id,
+        window_title=(title or "")[:120],
+        origin=[int(origin[0]), int(origin[1])],
+        scale_dpi=_system_dpi(),
+        size=[w, h],
+        captured_at=time.time(),
+    )
+
+
 def list_monitors() -> list[dict]:
     """Monitores com posições negativas, DPI e z-order básico (F2, best-effort)."""
     try:

@@ -32,6 +32,7 @@ import psutil
 import safety
 import server
 import state as statemod
+import uia
 import verification as verif
 from actions import execute
 from obs import capture_for_vision
@@ -200,22 +201,35 @@ def _app_bootstrap(
 # --- UIA por nome ------------------------------------------------------------
 def _resolve_uia(
     items: list[dict], target: str, wrect: tuple | None, state_title: str = ""
-) -> Action | None:
-    """Encontra elemento pelo NOME na janela ativa -> click no centro.
+) -> tuple[Action | None, str]:
+    """Encontra elemento pelo NOME na janela ativa -> (click no centro, "").
 
-    Retorna None se não achar (chamador escala p/ Vocaela). Nunca clica fora
-    da janela ativa nem em chrome (minimizar/fechar) nem na própria janela.
+    R2: alvo ambíguo NUNCA resolve por primeiro match — retorna
+    (None, "ambíguo: ...") p/ o planner desambiguar (contexto ou visão).
+    (None, "") = miss simples. Nunca clica fora da janela ativa, em chrome
+    (minimizar/fechar) nem na própria janela.
     """
     want = (target or "").strip().lower()
     if not want:
-        return None
+        return None, ""
     # "7" casa "Sete" e vice-versa
     wants = {want}
     if want in _DIGIT_WORDS:
         wants |= set(_DIGIT_WORDS[want])
     if want in _WORD_DIGIT:
         wants.add(_WORD_DIGIT[want])
-    exact = prefix = sub = None
+
+    def _tier(nl: str) -> int:
+        if nl in wants:
+            return 0
+        for w in wants:
+            if nl.startswith(w):
+                return 1
+            if w in nl:
+                return 2
+        return -1
+
+    tiers: dict[int, list[dict]] = {0: [], 1: [], 2: []}
     for it in items:
         name = (it.get("name") or "").strip()
         if not name or len(name) > 60:
@@ -227,22 +241,34 @@ def _resolve_uia(
             continue
         if state_title and nl == state_title.lower():
             continue
-        if nl in wants and exact is None:
-            exact = it
-            continue
-        for w in wants:
-            if nl.startswith(w) and prefix is None:
-                prefix = it
-            elif w in nl and sub is None:
-                sub = it
-    hit = exact or prefix or sub
-    if hit is None:
-        return None
+        t = _tier(nl)
+        if t >= 0:
+            tiers[t].append(it)
+    cands: list[dict] = tiers[0] or tiers[1] or tiers[2]
+    if not cands:
+        return None, ""
+    seen: dict[tuple, dict] = {}
+    for c in cands:
+        b = tuple(c.get("bounds") or [0, 0, 0, 0])
+        seen.setdefault(b, c)
+    if len(seen) > 1:
+        # Mesmo nome em lugares distintos: adivinhar é clicar no escuro.
+        labels = "; ".join(
+            f"{c.get('type', '?')}:{(c.get('name') or '')[:30]}"
+            f"@{c.get('context', '') or '?'}"
+            for _, c in sorted(seen.items())[:4]
+        )
+        return None, (
+            f"alvo ambíguo: {len(seen)} candidatos p/ {target!r} "
+            f"({labels}); uia_click exige nome único — desambigue pelo "
+            "contexto entre parênteses ou use visual_action"
+        )
+    hit = next(iter(seen.values()))
     b = hit.get("bounds") or [0, 0, 0, 0]
     cx, cy = (b[0] + b[2]) // 2, (b[1] + b[3]) // 2
     if wrect is not None and not (wrect[0] <= cx <= wrect[2] and wrect[1] <= cy <= wrect[3]):
-        return None  # rect fantasma fora da janela -> trata como miss
-    return Action(type="click", x=cx, y=cy)
+        return None, ""  # rect fantasma fora da janela -> trata como miss
+    return Action(type="click", x=cx, y=cy), ""
 
 
 def _planner_to_action(dec: PlannerDecision) -> Action | None:
@@ -549,6 +575,12 @@ def _decide_planner(
     t["uia_ms"] = round((time.perf_counter() - t0) * 1000, 1)
     t["uia_title"] = title
     t["uia_count"] = len(items)
+    try:
+        # R2: diagnóstico do snapshot (ok/provider_empty/truncated/
+        # timeout_partial/no_window/error). Mocks de teste não preenchem.
+        t["uia_diag"] = dict(getattr(uia, "LAST_DIAG", None) or {"source": "unavailable"})
+    except Exception:
+        t["uia_diag"] = {"source": "unavailable"}
     names = format_ui_names(items)
     # R1: observação ≠ evidência. Observação vira ID rastreável (prompt/
     # correção de efeito); só efeito CONFIRMADO entra em task_state.evidences
@@ -589,7 +621,7 @@ def _decide_planner(
         except Exception:
             want_profile = ""
         if want_profile:
-            hit = _resolve_uia(items, want_profile, wrect, state_title=title)
+            hit, _amb = _resolve_uia(items, want_profile, wrect, state_title=title)
             if hit is not None:
                 return Decision(
                     action=hit,
@@ -597,6 +629,8 @@ def _decide_planner(
                     confidence=None,
                     reason=f"perfil lembrado ({want_profile})",
                 ), t
+            # Ambíguo ou miss com preferência: não adivinhar entre perfis —
+            # cai no ask abaixo com as opções visíveis.
         choices = []
         for item in items:
             label = str(item.get("name", "")).strip()
@@ -869,11 +903,15 @@ def _decide_planner(
         ), t
 
     if dec.type == "uia_click":
-        hit = _resolve_uia(items, dec.target or "", wrect, state_title=title)
+        hit, note = _resolve_uia(items, dec.target or "", wrect, state_title=title)
         if hit is not None:
             return Decision(
                 action=hit, source="uia", confidence=None, reason=f'uia_click("{dec.target}")'
             ), t
+        if note.startswith("alvo ambíguo"):
+            # R2: a visão também adivinharia — o planner desambigua pelo
+            # contexto (nomes repetidos) em vez de clicar no escuro.
+            raise RuntimeError(note)
         if ctx.get("no_vision"):
             raise RuntimeError(
                 f"uia_click: {dec.target!r} não está na "
@@ -887,6 +925,15 @@ def _decide_planner(
     s0 = time.perf_counter()
     img, origin, full = capture_for_vision(max_long_edge=int(cfg.get("screenshot_max_width", 1024)))
     t["screenshot_ms"] = round((time.perf_counter() - s0) * 1000, 1)
+    try:
+        from obs import frame_ref_for
+
+        frame = frame_ref_for(origin, (img.size[0], img.size[1]),
+                              title, t.get("observation_id", ""))
+        t["frame"] = frame.model_dump()
+        t["visual_title"] = title
+    except Exception:
+        pass
     try:
         from obs import LAST_PNG
 
@@ -1076,6 +1123,51 @@ def _state_fingerprint(title: str, ui_names: list[str]) -> str:
         ensure_ascii=False,
         sort_keys=True,
     )
+
+
+def _loop_has_progress(h3: list, h2: list, h1: list) -> bool:
+    """3 entradas [key, fp, result]: houve progresso? (puro, testável).
+
+    R2: progresso = fingerprint mudou OU os dois últimos resultados
+    conhecidos (vnote|confirm) diferem. Repetição do mesmo resultado sem
+    mudança de estado é ausência de efeito, não avanço.
+    """
+    same_fp = not _progress_made(h2[1], h1[1])
+    r_old = h3[2] if len(h3) > 2 else ""
+    r_prev = h2[2] if len(h2) > 2 else ""
+    return (not same_fp) or bool(r_old and r_prev and r_old != r_prev)
+
+
+def _foreground_title() -> str:
+    """Título da janela em foreground (best-effort, só leitura)."""
+    try:
+        import ctypes
+
+        h = ctypes.windll.user32.GetForegroundWindow()
+        if not h:
+            return ""
+        from pywinauto import Desktop
+
+        return Desktop(backend="uia").window(handle=int(h)).window_text() or ""
+    except Exception:
+        return ""
+
+
+def _visual_stale_note(dec: Decision, tm: dict) -> str:
+    """Alvo visual de frame obsoleto? Mudança de janela/modal entre a captura
+    e o clique invalida as coords (R2). Leitura nova, sem decidir nada."""
+    if getattr(dec, "source", "") != "vocaela":
+        return ""
+    expected = (tm.get("visual_title") or "").strip()
+    if not expected:
+        return ""
+    cur = _foreground_title().strip()
+    if cur and cur != expected:
+        return (
+            f"alvo do frame obsoleto: janela mudou {expected!r} -> {cur!r} "
+            "entre captura e clique (modal?); reobserve, não clique no escuro"
+        )
+    return ""
 
 
 def do_ask(question: str, cfg: dict, dry_run: bool = False) -> str:
@@ -1482,15 +1574,18 @@ def run(instruction: str, cfg: dict, dry_run: bool = False) -> dict:
                 else:  # uia
                     emit("PLANNER", f"uia: {dec.reason}", f"{tm.get('planner_ms', 0):.0f}ms")
 
-            # guard 3 (F3): anti-loop por ação+estado+efeito — preserva
+            # guard 3 (F3/R2): anti-loop por ação+estado+RESULTADO — preserva
             # tentativas malsucedidas e distingue repetição legítima
             # (scroll avançou: verify mudou) de ausência de progresso.
+            # O resultado (vnote|confirm) preenche o 3º campo após o verify.
             k = _key(dec.action, dec)
-            history.append((k, _state_fingerprint(tm.get("uia_title", ""), tm.get("ui_names", []))))
+            fp = _state_fingerprint(tm.get("uia_title", ""), tm.get("ui_names", []))
+            history.append([k, fp, ""])
             if len(history) >= 3 and history[-1][0] == history[-2][0] == history[-3][0]:
-                prev_n = history[-2][1]
-                cur_n = history[-1][1]
-                if _progress_made(prev_n, cur_n):
+                # R2: progresso = estado mudou OU o último resultado mudou
+                # (vnote|confirm das execuções anteriores). Sem progresso
+                # real, a repetição vira last_error e depois stop.
+                if _loop_has_progress(history[-3], history[-2], history[-1]):
                     history.clear()  # progresso real: repetição legítima
                 elif not ctx.get("loop_warned"):
                     ctx["loop_warned"] = True
@@ -1607,6 +1702,11 @@ def run(instruction: str, cfg: dict, dry_run: bool = False) -> dict:
                             parts.append(execute(prim))
                         desc = f"sequence({'+'.join(parts)})"
                 else:
+                    # R2: alvo visual de frame obsoleto nunca clica — janela ou
+                    # modal mudou entre captura e clique? Reobserve.
+                    stale = _visual_stale_note(dec, tm)
+                    if stale:
+                        raise RuntimeError(stale)
                     desc = execute(dec.action)
             except (ValueError, RuntimeError) as e:
                 # coords fora da tela, app fora da whitelist...: o planner
@@ -1695,6 +1795,12 @@ def run(instruction: str, cfg: dict, dry_run: bool = False) -> dict:
                     ctx["last_action_result"] = ar.model_dump()
                 except Exception:
                     pass
+            # R2: carimba o resultado na entrada do anti-loop (vnote|confirm).
+            try:
+                if history and history[-1][0] == k and len(history[-1]) > 2:
+                    history[-1][2] = f"{vnote[:120]}|{cnote[:80]}"
+            except Exception:
+                pass
             emit("VERIFY", vnote, "")
             metrics["steps"] += 1
             _log(

@@ -96,6 +96,7 @@ class Observation(BaseModel):
     delta: str = ""  # o que mudou desde a observação anterior
     coverage: str = ""  # cortes/truncamento informados ao modelo
     truncated: bool = False
+    error: str = ""  # R2: diagnóstico (no_window/timeout/provider_empty/...) — "" = ok
 
 
 class TaskState(BaseModel):
