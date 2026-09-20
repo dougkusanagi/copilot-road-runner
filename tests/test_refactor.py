@@ -198,6 +198,20 @@ class TestVerification(unittest.TestCase):
         ok, _ = vf.confirm_effect("hotkey:ctrl+t", after="window 'A'")
         self.assertFalse(ok)
 
+    def test_answer_nao_confirma_a_si_mesmo(self):
+        import verification as vf
+
+        ok, note = vf.confirm_effect("answer", "R$ 10")
+        self.assertFalse(ok)
+        self.assertIn("evidência", note)
+
+    def test_prompt_unificado_expoe_frame_sem_promessa_de_evidencia(self):
+        from planner import build_unified_prompt
+
+        prompt = build_unified_prompt("g", "w", [], [], frame_id="frm-1")
+        self.assertIn("frm-1", prompt)
+        self.assertIn("not evidence", prompt)
+
     def test_fingerprint_muda_com_conteudo_uia(self):
         import loop
 
@@ -902,8 +916,9 @@ class TestSequenceRecipe(unittest.TestCase):
         from schemas import Action, Decision
 
         dec = Decision(
-            action=Action(type="wait", ms=0),
+            action=Action(type="hotkey", key="ctrl+alt+n"),
             source="planner",
+            kind="sequence",
             steps=[Action(type="hotkey", key="ctrl+alt+n")],
         )
         va = loop._verify_action(dec)
@@ -926,8 +941,9 @@ class TestSequenceRecipe(unittest.TestCase):
         from schemas import Action, Decision
 
         dec = Decision(
-            action=Action(type="wait", ms=0),
+            action=Action(type="hotkey", key="ctrl+alt+n"),
             source="planner",
+            kind="sequence",
             steps=[Action(type="hotkey", key="ctrl+alt+n")],
         )
         note = loop._repeat_note(dec.action, dec)

@@ -20,7 +20,14 @@ def init(objective: str) -> TaskState:
 
 
 def apply_update(state: TaskState, update: dict) -> TaskState:
-    """Aplica atualização compacta do modelo, validada (puro, testável)."""
+    """Aplica atualização compacta do modelo, validada (puro, testável).
+
+    R1: proposta ≠ aceita. `done_items` (concluídas) só são aceitos com
+    `evidence_refs` que existam em `state.evidences` (efeito confirmado
+    posterior à ação). Sem refs válidas, as concluídas propostas são
+    ignoradas — alegação do modelo não vira fato. Subobjetivo, pendências,
+    fatos e hipóteses continuam aceitos (fatos seguem falíveis/auditáveis).
+    """
     if not isinstance(update, dict):
         return state
     sub = update.get("subgoal") or update.get("subobjetivo")
@@ -30,9 +37,19 @@ def apply_update(state: TaskState, update: dict) -> TaskState:
         val = update.get(key)
         if isinstance(val, list):
             state.pending = [str(v)[:200] for v in val[:20]]
+    refs = update.get("evidence_refs") or update.get("evidences") or update.get("evidence")
+    if isinstance(refs, str):
+        refs = [refs]
+    valid_refs = (
+        [str(r) for r in refs if str(r) in state.evidences]
+        if isinstance(refs, list)
+        else []
+    )
     for key in ("done_items", "concluidas", "done"):
         val = update.get(key)
         if isinstance(val, list):
+            if not valid_refs:
+                continue  # R1: concluída sem evidência confirmada = ignorada
             for v in val[:20]:
                 s = str(v)[:200]
                 if s and s not in state.done_items:

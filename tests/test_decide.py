@@ -105,7 +105,9 @@ class TestDecideStep(unittest.TestCase):
         self.assertEqual(tm.get("vision_calls", 0), 0)
 
     def test_done_sem_acao_recusado(self):
-        # guard 4: planner diz done sem ter feito nada -> last_error, não done
+        # R1: `done` exige evidência de EFEITO CONFIRMADO. Janela vista ou
+        # ação enviada não prova objetivo — done sem refs ou com refs
+        # desconhecidas veta, mesmo que a observação exista na tela.
         self._patch_snapshot([], "Edge", None)
         with self.assertRaises(RuntimeError):
             loop.decide(
@@ -127,19 +129,38 @@ class TestDecideStep(unittest.TestCase):
             )
         import state as statemod
 
-        evidence = "obs-step-2: window='Edge'; ui=(sem elementos expostos)"
-        dec, _ = loop.decide(
+        st = statemod.init("abra o Edge")
+        # Observação vista mas NÃO confirmada: observar não confirma (R1).
+        fake_observed = "obs-abc123: window='Edge'; ui=(sem elementos expostos)"
+        with self.assertRaises(RuntimeError):
+            loop.decide(
+                "abra o Edge",
+                2,
+                {
+                    "hist_labels": ["opened msedge => window 'Edge'"],
+                    "task_state": st,
+                },
+                CFG,
+                planner=_FakePlanner(PlannerDecision(type="done", evidences=[fake_observed])),
+                vocaela=_NoVision(),
+            )
+        self.assertNotIn(fake_observed, st.evidences)
+        # Efeito confirmado entra na memória e autoriza o done exato.
+        confirmed = "opened msedge => window 'Edge'"
+        statemod.add_evidence(st, confirmed)
+        dec, tm = loop.decide(
             "abra o Edge",
             2,
             {
                 "hist_labels": ["opened msedge => window 'Edge'"],
-                "task_state": statemod.init("abra o Edge"),
+                "task_state": st,
             },
             CFG,
-            planner=_FakePlanner(PlannerDecision(type="done", evidences=[evidence])),
+            planner=_FakePlanner(PlannerDecision(type="done", evidences=[confirmed])),
             vocaela=_NoVision(),
         )
         self.assertEqual(dec.action.type, "done")
+        self.assertEqual(dec.observation_ref, tm.get("observation_id"))
 
     def test_observe_e_done_allowed(self):
         from schemas import Action

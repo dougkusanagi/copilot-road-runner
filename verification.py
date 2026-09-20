@@ -50,7 +50,11 @@ def confirm_effect(
             return False, f"janela mudou p/ {after!r}; efeito ainda não confirmado"
         return False, "não confirmado: sem mudança observada"
     if action_type == "answer":
-        return (bool(expected), "fato reportado" if expected else "não confirmado: answer vazio")
+        return False, (
+            "answer reportado; exige evidência UIA/frame independente"
+            if expected
+            else "não confirmado: answer vazio"
+        )
     if action_type == "done":
         return False, "done exige evidências (verificar à parte)"
     if action_type == "hotkey:ctrl+t":

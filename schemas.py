@@ -27,7 +27,7 @@ ActionType = Literal["click", "double_click", "right_click", "middle_click", "mo
                      "answer", "done", "ask"]
 SourceType = Literal["planner", "uia", "vocaela"]
 
-DecisionKind = Literal["action", "perception", "skill", "finish"]
+DecisionKind = Literal["action", "perception", "skill", "sequence", "finish"]
 CompletionStatus = Literal["success", "partial", "blocked", "cancelled"]
 SentStatus = Literal["sent", "not_sent", "unknown"]
 
@@ -127,8 +127,24 @@ class Decision(BaseModel):
     observation_ref: str = ""
     frame_ref: str = ""
     task_update: dict = Field(default_factory=dict)  # atualização compacta
-    # F6: sequência de até 3 primitivas (quando action é placeholder wait).
+    # F6/R1: sequência de até 3 primitivas (action = 1ª primitiva,
+    # representativa; execução usa steps).
     steps: list[Action] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _discriminated(self) -> Decision:
+        # R1: união discriminada por kind — sem ação fictícia contrabandeada.
+        # sequence carrega primitivas em steps (action = 1ª primitiva,
+        # representativa); skill CLI carrega skill/skill_args (action é
+        # placeholder nunca executado — o executor ramifica por kind antes
+        # de execute()); action/perception/finish nunca carregam steps.
+        if self.kind == "sequence" and not self.steps:
+            raise ValueError("kind=sequence exige steps (1..3 primitivas)")
+        if self.kind == "skill" and not (self.skill or "").strip():
+            raise ValueError("kind=skill exige skill")
+        if self.kind in ("action", "perception", "finish") and self.steps:
+            raise ValueError(f"kind={self.kind} não carrega steps (use kind=sequence)")
+        return self
 
 
 class ActionResult(BaseModel):

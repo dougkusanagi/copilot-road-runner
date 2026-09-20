@@ -177,7 +177,11 @@ def build_unified_prompt(
     )
     extra = ""
     if frame_id:
-        extra += f"\nFrame: {frame_id} (coords 0..1 só neste frame)."
+        extra += (
+            f"\nFrame: {frame_id} (coords 0..1 só neste frame)."
+            f"\nScreenshot {frame_id} is observation, not evidence: facts visible here"
+            " still need confirmation; citing the frame alone does not prove the goal."
+        )
     if skill:
         extra += f"\nActive skill: {skill[:120]}"
     return (
@@ -455,13 +459,15 @@ class QwenVLPlanner(MiniCPMPlanner):
         buf = io.BytesIO()
         image.convert("RGB").save(buf, format="JPEG", quality=82)
         encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+        frame_id = f"frame-{time.time_ns()}"
+        self.last_frame_id = frame_id
         user = build_unified_prompt(
             goal,
             window,
             ui_names,
             history,
             last_error=last_error,
-            frame_id=f"frame-{time.time_ns()}",
+            frame_id=frame_id,
             task_summary=task_summary,
             last_result=last_result,
             skill=skill_context,

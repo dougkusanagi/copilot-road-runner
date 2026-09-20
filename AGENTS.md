@@ -18,6 +18,14 @@
   `docs/relatorio-r0-r3-2026-09-20.md`. B1 falhou 0/3 no primeiro probe real
   (repetiu ctrl+t); U1 passou 3/3, mas levou ~38 s aquecido em CPU-only.
   Isso não muda o default nem aprova R3/R4/R5.
+  R1 parcial em 20/09 (`tests/test_r1_cycle.py`, 224 verdes): observação ≠
+  evidência (obs/frame auto-add removidos; só efeito confirmado entra em
+  `task_state.evidences`); `done_items` exige `evidence_refs` válidas
+  (proposta vs aceita em `tm`); `Decision(kind=sequence)` sem `wait(0)`
+  fictício; `ActionResult` estruturado no `run()`; `observation_ref` em
+  toda decisão. R1 segue aberta: `ask` ainda é `Action` (falta kind
+  pergunta), `perception`/`finish` não migrados, probes ≥30 cenas e E2E
+  Sandbox pendentes.
 - Produto: computer use local, rápido, para GPU a partir de **6 GB de VRAM**;
   entender pedidos, observar monitores/janelas e usar mouse/teclado reais.
   UIA localiza e informa; modo GUI não usa edição semântica invisível ou open_url.

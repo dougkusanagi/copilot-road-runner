@@ -487,14 +487,19 @@ def _decide_planner(
     t["uia_title"] = title
     t["uia_count"] = len(items)
     names = format_ui_names(items)
-    observed = (
-        f"obs-step-{step}: window={title[:120]!r}; "
+    # R1: observação ≠ evidência. Observação vira ID rastreável (prompt/
+    # correção de efeito); só efeito CONFIRMADO entra em task_state.evidences
+    # (ver run(): confirm_effect). Ação enviada ou janela vista nunca prova
+    # objetivo cumprido.
+    from schemas import new_id as _new_id
+
+    obs_id = _new_id("obs")
+    t["observation_id"] = obs_id
+    ctx["last_observation_id"] = obs_id
+    ctx["last_observation"] = (
+        f"{obs_id}: window={title[:120]!r}; "
         f"ui={'; '.join(names[:12]) or '(sem elementos expostos)'}"
     )
-    try:
-        statemod.add_evidence(ctx.get("task_state"), observed)
-    except Exception:
-        pass
 
     # guard 1: bootstrap ANTES do planner (senão a decisão do 1B é descartada
     # e a latência, paga à toa).
@@ -564,6 +569,12 @@ def _decide_planner(
             )
             t["planner_ms"] = round(t["planner_ms"] + pms, 1)
             t["planner_calls"] += 1
+            frame_id = str(getattr(planner, "last_frame_id", "") or "")
+            if frame_id:
+                # R1: frame disponível ≠ fato confirmado. O ID fica rastreável
+                # (observation_ref/frame_ref); evidência exige confirmação.
+                t["frame_id"] = frame_id
+                ctx["last_frame_id"] = frame_id
             if dec.type != "use_skill":
                 break
             try:
@@ -665,11 +676,24 @@ def _decide_planner(
         if not ok:
             raise RuntimeError(f"'done' recusado: {msg}")
     # F3: memória — atualização compacta validada (fato != hipótese).
+    # R1: proposta registrada separada da aceita; concluídas sem
+    # evidence_refs válidas são ignoradas (alegação não vira fato).
     if dec.task_update:
         try:
             ts = ctx.get("task_state")
             if ts is not None:
+                proposed = dict(dec.task_update)
+                before_done = list(getattr(ts, "done_items", []) or [])
                 statemod.apply_update(ts, dec.task_update)
+                t["task_update_proposed"] = proposed
+                t["task_update_accepted_done"] = [
+                    d for d in getattr(ts, "done_items", []) if d not in before_done
+                ]
+                prop_done = (
+                    proposed.get("done_items") or proposed.get("concluidas") or proposed.get("done")
+                )
+                if isinstance(prop_done, list) and prop_done and not t["task_update_accepted_done"]:
+                    t["task_update_rejected"] = "done_items sem evidence_refs válidas"
         except Exception:
             pass
 
@@ -727,12 +751,13 @@ def _decide_planner(
                         "sequence(ctrl+l, type_text(URL), enter)."
                     )
         return Decision(
-            action=Action(type="wait", ms=0),
+            action=acts[0],
             source="planner",
             confidence=None,
-            kind="action",
+            kind="sequence",
             steps=acts,
             expected_effect=f"sequência de {len(acts)} primitivas",
+            observation_ref=t.get("observation_id", ""),
             reason=f"planner sequence({_steps_label(acts)})",
         ), t
 
@@ -794,9 +819,17 @@ def decide(
             "online; sem fallback programático."
         )
     dec, tm = _decide_planner(instruction, step, ctx, cfg, planner, vocaela)
-    # F1: JSON válido não garante decisão correta — vetos Python sobre a
-    # ação final (coords físicas de UIA/visão são legítimas aqui; o veto a
-    # coords do planner vive em PlannerDecision).
+    # R1: toda decisão carrega a observação de origem (alvo por ID/frame,
+    # nunca reutilizado). Vetos Python sobre a ação final (coords físicas
+    # de UIA/visão são legítimas aqui; o veto a coords do planner vive
+    # em PlannerDecision).
+    try:
+        if not (dec.observation_ref or "").strip():
+            dec.observation_ref = str(tm.get("observation_id", "") or "")
+        if not (dec.frame_ref or "").strip():
+            dec.frame_ref = str(tm.get("frame_id", "") or "")
+    except Exception:
+        pass
     a = dec.action
     if a.type == "type" and not (a.text or "").strip():
         raise RuntimeError("type precisa de text")
@@ -1519,6 +1552,26 @@ def run(instruction: str, cfg: dict, dry_run: bool = False) -> dict:
                     statemod.add_evidence(ctx.get("task_state"), f"{label} => {vnote}")
             except Exception:
                 cnote = ""
+                confirmed = False
+            # R1: resultado estruturado (ID, enviado/confirmado, erro, pós-estado,
+            # evidências). Dry-run nunca envia: sent=not_sent, sem evidência.
+            try:
+                from schemas import ActionResult as _AR
+                from schemas import new_id as _nid
+
+                ev_label = f"{label} => {vnote}"
+                ar = _AR(
+                    action_id=_nid("act"),
+                    sent=("not_sent" if dry_run else "sent"),
+                    confirmed=bool(ok and confirmed and not dry_run),
+                    evidences=([ev_label] if (ok and confirmed and not dry_run) else []),
+                    error=("" if ok else vnote[:200]),
+                    post_state=vnote[:300],
+                )
+                tm["action_result"] = ar.model_dump()
+                ctx["last_action_result"] = ar.model_dump()
+            except Exception:
+                pass
             emit("VERIFY", vnote, "")
             metrics["steps"] += 1
             _log(
