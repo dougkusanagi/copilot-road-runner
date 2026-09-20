@@ -97,6 +97,7 @@ def format_ui_names(items: list[dict], limit: int = 40) -> list[str]:
 
     Ex.: "Button:7", "Edit:Pesquisar". Sem coordenadas (o planner não vê
     a tela). Nomes >60 chars são os mesmos que `_resolve_uia` ignora.
+    R2: sufixo `="valor"` quando o elemento expõe texto (preço, campo).
     """
 
     def label(it: dict) -> str | None:
@@ -104,7 +105,11 @@ def format_ui_names(items: list[dict], limit: int = 40) -> list[str]:
         if not name:
             return None
         ctype = (it.get("type") or "").strip() or "?"
-        return f"{ctype}:{name[:60]}"
+        base = f"{ctype}:{name[:60]}"
+        val = " ".join(str(it.get("value") or "").split())
+        if val:
+            base += f'="{val[:40]}"'
+        return base
 
     ordered = sorted(
         items,
@@ -373,13 +378,29 @@ def _sequence_to_actions(dec: PlannerDecision) -> list[Action]:
     return out
 
 
-# --- percepção read-only R1 ---------------------------------------------------
+# --- percepção read-only R1/R2 ------------------------------------------------
 # O planner textual nunca vê pixels; `perceive` é como ele pede releitura
-# SEM clicar/digitar. Só UIA + campo focado nesta etapa (OCR visual é R2):
-# superfície pequena, real e testável. Fatos voltam como observação (dados),
-# nunca como evidência confirmada nem como instrução.
-PERCEPTION_SPECS = ("uia_refresh", "read_focused")
+# SEM clicar/digitar. UIA + campo focado + expansão de ramo (OCR segue
+# pendente, sem backend local no ambiente). Fatos voltam como observação
+# (dados), nunca como evidência confirmada nem como instrução.
+PERCEPTION_SPECS = ("uia_refresh", "read_focused", "expand:<nome>")
 PERCEPTION_BUDGET_DEFAULT = 6
+
+
+def _parse_perception(spec: str) -> tuple[str, str]:
+    """(base, arg) da spec de percepção. Erro cita as formas válidas."""
+    s = (spec or "").strip()
+    low = s.lower()
+    if low in ("uia_refresh", "read_focused"):
+        return low, ""
+    if low.startswith("expand:"):
+        arg = s[len("expand:"):].strip()
+        if arg:
+            return "expand", arg
+    raise RuntimeError(
+        f"perceive({spec!r}) inválido: use uia_refresh, read_focused "
+        "ou expand:<nome visível na árvore>"
+    )
 
 
 def _check_perception_budget(ctx: dict, cfg: dict) -> None:
@@ -399,30 +420,42 @@ def _run_perception(
     tm: dict,
     snapshot_fn=None,
     focused_fn=None,
+    expand_fn=None,
 ) -> str:
     """Releitura read-only: NENHUM input físico. Retorna fatos p/ o prompt."""
     del cfg
-    spec = (spec or "").strip().lower()
-    if spec not in PERCEPTION_SPECS:
-        raise RuntimeError(f"perceive({spec!r}) inválido: use um de {list(PERCEPTION_SPECS)}")
-    snap = snapshot_fn or active_window_snapshot
-    items, title, _wrect = snap()
-    names = format_ui_names(items)
+    base, arg = _parse_perception(spec)
+    spec_norm = f"{base}:{arg}" if arg else base
     from schemas import new_id as _new_id
 
     obs_id = _new_id("obs")
-    if spec == "read_focused":
+    if base == "read_focused":
+        _items, title, _w = (snapshot_fn or active_window_snapshot)()
         read = (focused_fn or focused_value)()
         facts = (
             f"perceive(read_focused @{obs_id}): window={title[:80]!r}; "
             f"focused={(read[:120] if read else '(vazio/ilegível)')!r}"
         )
+    elif base == "expand":
+        exp = expand_fn or uia.expand_subtree
+        items, title, note = exp(arg)
+        if note and not items:
+            raise RuntimeError(note)
+        names = format_ui_names(items, limit=15)
+        facts = (
+            f"perceive(expand:{arg} @{obs_id}): window={title[:80]!r}; "
+            f"ramo={'; '.join(names) or '(sem descendentes nomeados)'}"
+            + (f"; nota: {note[:120]}" if note else "")
+        )
     else:
+        snap = snapshot_fn or active_window_snapshot
+        items, title, _wrect = snap()
+        names = format_ui_names(items)
         facts = (
             f"perceive(uia_refresh @{obs_id}): window={title[:80]!r}; "
             f"ui={'; '.join(names[:15]) or '(sem elementos expostos)'}"
         )
-    tm["perception"] = {"spec": spec, "observation_id": obs_id, "facts": facts[:500]}
+    tm["perception"] = {"spec": spec_norm, "observation_id": obs_id, "facts": facts[:500]}
     try:
         feats = ctx.setdefault("perception_facts", [])
         feats.append(facts[:500])
@@ -884,22 +917,22 @@ def _decide_planner(
         ), t
 
     if dec.type == "perceive":
-        # R1: percepção read-only pedida pelo modelo; a releitura (sem input
-        # físico) executa no run(). Spec validado aqui; teto separado no run().
-        spec = (dec.perception or "").strip().lower()
-        if spec not in PERCEPTION_SPECS:
-            raise RuntimeError(
-                f"perceive({dec.perception!r}) inválido: use um de {list(PERCEPTION_SPECS)}"
-            )
+        # R1/R2: percepção read-only pedida pelo modelo; a releitura (sem
+        # input físico) executa no run(). Spec validado aqui; teto no run().
+        try:
+            base, arg = _parse_perception(dec.perception or "")
+        except RuntimeError as e:
+            raise RuntimeError(str(e))
+        spec_norm = f"{base}:{arg}" if arg else base
         return Decision(
-            action=Action(type="perceive", text=spec),
+            action=Action(type="perceive", text=spec_norm),
             source="planner",
             confidence=None,
             kind="perception",
-            perception=spec,
+            perception=spec_norm,
             expected_effect="releitura sem input físico; fatos voltam como observação",
             observation_ref=t.get("observation_id", ""),
-            reason=f"planner perceive({spec})",
+            reason=f"planner perceive({spec_norm})",
         ), t
 
     if dec.type == "uia_click":
@@ -994,7 +1027,7 @@ def decide(
     if a.type == "ask" and not (a.text or "").strip():
         raise RuntimeError("ask precisa de text (a pergunta ao humano)")
     if a.type == "perceive" and not (a.text or "").strip():
-        raise RuntimeError("perceive precisa de spec (uia_refresh|read_focused)")
+        raise RuntimeError("perceive precisa de spec (uia_refresh|read_focused|expand:<nome>)")
     if dec.confidence is not None and not (0.0 <= dec.confidence <= 1.0):
         raise RuntimeError(f"confidence fora de 0..1: {dec.confidence}")
     return dec, tm

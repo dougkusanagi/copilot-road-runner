@@ -35,6 +35,12 @@
   de frame obsoleto (janela/modal mudou → sem clique); anti-loop considera
   resultado (`_loop_has_progress`). OCR local pendente (sem backend no
   ambiente); expansão de ramo UIA e probes visuais ficam p/ próxima fatia.
+  R2 fatia 2 em 20/09 (265 verdes, bateria com 7 fixtures): `value` de tipos
+  textuais capturado no walk (`Edit`/`Text`/… → `tipo:nome="valor"`) e
+  `perceive` com `expand:<nome>` (subárvore real via `uia.expand_subtree`,
+  com miss/ambíguo honestos, sem input). OCR segue pendente: sem `winrt`/
+  tesseract no ambiente; candidatos (Windows.Media.Ocr, tesseract) exigem
+  spike de backend + medição antes de entrar no `perceive`.
 - Produto: computer use local, rápido, para GPU a partir de **6 GB de VRAM**;
   entender pedidos, observar monitores/janelas e usar mouse/teclado reais.
   UIA localiza e informa; modo GUI não usa edição semântica invisível ou open_url.

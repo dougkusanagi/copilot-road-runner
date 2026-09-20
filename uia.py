@@ -78,15 +78,111 @@ def focused_value(max_len: int = 80) -> str:
         return ""
 
 
+def _active_window():
+    """Wrapper da janela ativa ou None (filtro de overlay incluído).
+
+    Extração R2 da descoberta antes embutida no snapshot: mesma lógica
+    (handle em foreground → foco → primeira com título), reutilizada pela
+    expansão de ramo.
+    """
+    from pywinauto import Desktop
+
+    try:
+        desk = Desktop(backend="uia")
+    except Exception:
+        return None
+    active = None
+    # 1. tenta handle da janela em foreground (mais preciso)
+    try:
+        import ctypes
+
+        h = ctypes.windll.user32.GetForegroundWindow()
+        if h:
+            try:
+                active = desk.window(handle=h).wrapper_object()
+                try:
+                    # O overlay (borda "controlado") pode estar em
+                    # foreground: nunca é a janela do app (era 'tk' e o
+                    # planner tentava focus("tk") no próprio overlay).
+                    if is_overlay_title(active.window_text() or ""):
+                        active = None
+                except Exception:
+                    pass
+            except Exception:
+                active = None
+    except Exception:
+        pass
+    # 2. fallback: enumera e pega a que tem foco
+    if active is None:
+        try:
+            wins = desk.windows(top_level_only=True, visible_only=True)
+        except Exception as e:
+            raise RuntimeError(f"enumerate_failed: {e}")
+        for w in wins:
+            try:
+                if is_overlay_title(w.window_text() or ""):
+                    continue
+                for attr in ("has_focus", "is_active", "has_keyboard_focus"):
+                    fn = getattr(w, attr, None)
+                    if callable(fn) and fn():
+                        active = w
+                        break
+                if active is not None:
+                    break
+            except Exception:
+                continue
+        # 3. fallback final: primeira com título
+        if active is None:
+            for w in wins:
+                try:
+                    if is_overlay_title(w.window_text() or ""):
+                        continue
+                    if (w.window_text() or "").strip():
+                        active = w
+                        break
+                except Exception:
+                    continue
+    return active
+
+
+_TEXT_TYPES = {"edit", "document", "text", "hyperlink", "listitem", "combobox"}
+
+
+def _element_text(elem, ctype: str, name: str) -> str:
+    """Texto/valor de elemento textual (preço, campo, item). Best-effort.
+
+    R2: preserva textos úteis (ex.: preço em Text, conteúdo de Edit).
+    Retorna "" quando igual ao nome (window_text ecoa o nome) ou ilegível.
+    """
+    if (ctype or "").strip().lower() not in _TEXT_TYPES:
+        return ""
+    try:
+        try:
+            v = elem.iface_value.CurrentValue or ""
+        except Exception:
+            v = ""
+        if not v:
+            try:
+                v = elem.window_text() or ""
+            except Exception:
+                v = ""
+        v = " ".join(str(v).split())
+        if not v or v == (name or "").strip():
+            return ""
+        return v[:200]
+    except Exception:
+        return ""
+
+
 def active_window_snapshot(timeout: float = 5.0,
                            max_elements: int = 120) -> tuple[list[dict], str, tuple | None]:
     """Elementos úteis da janela ATIVA, formato compacto p/ decisão rápida.
 
-    Retorna (items, title, wrect) onde items = [{id, name, type, bounds}].
-    Ignora invisíveis, sem nome, com área trivial ou fora da janela/tela.
+    Retorna (items, title, wrect) onde items =
+    [{id, name, type, bounds, value, context}]. Ignora invisíveis, sem nome,
+    com área trivial ou fora da janela/tela. `value` traz texto de tipos
+    textuais (R2); "" quando igual ao nome ou ilegível.
     """
-    from pywinauto import Desktop
-
     t0 = time.perf_counter()
     items: list[dict] = []
 
@@ -94,60 +190,7 @@ def active_window_snapshot(timeout: float = 5.0,
         return (time.perf_counter() - t0) * 1000.0
 
     try:
-        desk = Desktop(backend="uia")
-        active = None
-        # 1. tenta handle da janela em foreground (mais preciso)
-        try:
-            import ctypes
-
-            h = ctypes.windll.user32.GetForegroundWindow()
-            if h:
-                try:
-                    active = desk.window(handle=h).wrapper_object()
-                    try:
-                        # O overlay (borda "controlado") pode estar em
-                        # foreground: nunca é a janela do app (era 'tk' e o
-                        # planner tentava focus("tk") no próprio overlay).
-                        if is_overlay_title(active.window_text() or ""):
-                            active = None
-                    except Exception:
-                        pass
-                except Exception:
-                    active = None
-        except Exception:
-            pass
-        # 2. fallback: enumera e pega a que tem foco
-        if active is None:
-            try:
-                wins = desk.windows(top_level_only=True, visible_only=True)
-            except Exception as e:
-                _set_diag(status="error", error=f"enumerate_failed: {e}"[:200],
-                          count=0, max_elements=max_elements, elapsed_ms=_elapsed_ms())
-                return [], "", None
-            for w in wins:
-                try:
-                    if is_overlay_title(w.window_text() or ""):
-                        continue
-                    for attr in ("has_focus", "is_active", "has_keyboard_focus"):
-                        fn = getattr(w, attr, None)
-                        if callable(fn) and fn():
-                            active = w
-                            break
-                    if active is not None:
-                        break
-                except Exception:
-                    continue
-            # 3. fallback final: primeira com título
-            if active is None:
-                for w in wins:
-                    try:
-                        if is_overlay_title(w.window_text() or ""):
-                            continue
-                        if (w.window_text() or "").strip():
-                            active = w
-                            break
-                    except Exception:
-                        continue
+        active = _active_window()
         if active is None:
             _set_diag(status="no_window", count=0, max_elements=max_elements,
                       elapsed_ms=_elapsed_ms())
@@ -199,6 +242,7 @@ def active_window_snapshot(timeout: float = 5.0,
                 if name and area_ok and inside and on_screen:
                     items.append({"id": len(items), "name": name,
                                   "type": ctype, "bounds": list(bounds),
+                                  "value": _element_text(elem, ctype, name),
                                   "context": " > ".join(next_anc[-3:-1])})
                 for child in elem.children():
                     walk(child, depth + 1, next_anc)
@@ -224,6 +268,102 @@ def active_window_snapshot(timeout: float = 5.0,
         _set_diag(status="error", error=str(e)[:200], count=len(items),
                   max_elements=max_elements, elapsed_ms=_elapsed_ms())
         return [], "", None
+
+
+def expand_subtree(target: str, timeout: float = 5.0,
+                   max_elements: int = 40) -> tuple[list[dict], str, str]:
+    """Releitura enraizada no ramo cujo nome contém `target` (R2).
+
+    Retorna (items, title, note): items = descendentes do ramo (até
+    max_elements, com value/context); note = "" ou diagnóstico ("não está
+    na árvore", "ambíguo: ..." p/ desambiguar). Só leitura, sem input.
+    """
+    want = (target or "").strip().lower()
+    if not want:
+        return [], "", "expand vazio: use expand:<nome visível na árvore>"
+    t0 = time.perf_counter()
+    try:
+        active = _active_window()
+    except Exception as e:
+        return [], "", f"expand falhou: {e}"[:200]
+    if active is None:
+        return [], "", "expand sem janela ativa"
+    try:
+        title = active.window_text() or ""
+    except Exception:
+        title = ""
+    matches: list = []
+    try:
+        queue = list(active.children())
+        while queue and len(matches) < 5:
+            if time.perf_counter() - t0 > timeout:
+                break
+            el = queue.pop(0)
+            try:
+                nm = (el.element_info.name or "").strip()
+            except Exception:
+                continue
+            if nm and want in nm.lower():
+                matches.append(el)
+                continue  # não desce em ramo já casado
+            try:
+                queue.extend(el.children())
+            except Exception:
+                pass
+    except Exception:
+        pass
+    if not matches:
+        return [], title, f"expand: {target!r} não está na árvore atual"
+    if len(matches) > 1:
+        labels = []
+        for m in matches:
+            try:
+                labels.append(f"{m.element_info.control_type}:"
+                              f"{(m.element_info.name or '')[:40]}")
+            except Exception:
+                labels.append("?")
+        return [], title, (
+            f"expand ambíguo: {len(matches)} ramos p/ {target!r} "
+            f"({'; '.join(labels)}); seja mais específico"
+        )
+    root = matches[0]
+    try:
+        root_name = (root.element_info.name or "").strip() or target
+    except Exception:
+        root_name = target
+    items: list[dict] = []
+
+    def walk(elem, depth: int, ancestors: tuple = ()) -> None:
+        if len(items) >= max_elements or depth > MAX_DEPTH:
+            return
+        if time.perf_counter() - t0 > timeout:
+            return
+        try:
+            info = elem.element_info
+            name = (getattr(info, "name", "") or "").strip()[:120]
+            ctype = str(getattr(info, "control_type", "") or "")[:60]
+            try:
+                r = info.rectangle
+                bounds = (r.left, r.top, r.right, r.bottom)
+            except Exception:
+                bounds = (0, 0, 0, 0)
+            bl, bt, br, bb = bounds
+            next_anc = ancestors + (name,) if name else ancestors
+            if name and (br - bl) > 4 and (bb - bt) > 4:
+                items.append({"id": len(items), "name": name,
+                              "type": ctype, "bounds": list(bounds),
+                              "value": _element_text(elem, ctype, name),
+                              "context": " > ".join((root_name,) + next_anc[-2:-1])})
+            for child in elem.children():
+                walk(child, depth + 1, next_anc)
+                if len(items) >= max_elements:
+                    break
+        except Exception:
+            return
+
+    walk(root, 0, ())
+    note = "" if items else f"expand: ramo {root_name!r} sem descendentes nomeados"
+    return items, title, note
 
 
 def snapshot(timeout: float = 5.0, max_elements: int = 120) -> object:
