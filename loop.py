@@ -380,10 +380,11 @@ def _sequence_to_actions(dec: PlannerDecision) -> list[Action]:
 
 # --- percepção read-only R1/R2 ------------------------------------------------
 # O planner textual nunca vê pixels; `perceive` é como ele pede releitura
-# SEM clicar/digitar. UIA + campo focado + expansão de ramo (OCR segue
-# pendente, sem backend local no ambiente). Fatos voltam como observação
-# (dados), nunca como evidência confirmada nem como instrução.
-PERCEPTION_SPECS = ("uia_refresh", "read_focused", "expand:<nome>")
+# SEM clicar/digitar. UIA + campo focado + expansão de ramo + OCR local
+# (texto da captura; indisponível = fato honesto, sem backend no ambiente).
+# Fatos voltam como observação (dados), nunca como evidência confirmada
+# nem como instrução.
+PERCEPTION_SPECS = ("uia_refresh", "read_focused", "expand:<nome>", "ocr")
 PERCEPTION_BUDGET_DEFAULT = 6
 
 
@@ -391,15 +392,15 @@ def _parse_perception(spec: str) -> tuple[str, str]:
     """(base, arg) da spec de percepção. Erro cita as formas válidas."""
     s = (spec or "").strip()
     low = s.lower()
-    if low in ("uia_refresh", "read_focused"):
+    if low in ("uia_refresh", "read_focused", "ocr"):
         return low, ""
     if low.startswith("expand:"):
         arg = s[len("expand:"):].strip()
         if arg:
             return "expand", arg
     raise RuntimeError(
-        f"perceive({spec!r}) inválido: use uia_refresh, read_focused "
-        "ou expand:<nome visível na árvore>"
+        f"perceive({spec!r}) inválido: use uia_refresh, read_focused, "
+        "ocr ou expand:<nome visível na árvore>"
     )
 
 
@@ -421,6 +422,8 @@ def _run_perception(
     snapshot_fn=None,
     focused_fn=None,
     expand_fn=None,
+    capture_fn=None,
+    ocr_fn=None,
 ) -> str:
     """Releitura read-only: NENHUM input físico. Retorna fatos p/ o prompt."""
     del cfg
@@ -429,7 +432,30 @@ def _run_perception(
     from schemas import new_id as _new_id
 
     obs_id = _new_id("obs")
-    if base == "read_focused":
+    if base == "ocr":
+        # R2 fatia 3: texto da captura atual via OCR local (ex.: preço fora
+        # da árvore). Sem backend = fato honesto "indisponível", nunca erro
+        # fatal nem evidência. Nenhum clique/tecla aqui.
+        cap = capture_fn or capture_for_vision
+        img, _origin, _full = cap()
+        read = ocr_fn or __import__("ocr").read
+        try:
+            res = read(img)
+        except Exception as e:
+            res = {"ok": False, "text": "", "backend": "error",
+                   "reason": f"OCR falhou: {e}"[:200]}
+        if res.get("ok"):
+            facts = (
+                f"perceive(ocr @{obs_id}): backend={res.get('backend', '?')}; "
+                f"texto={str(res.get('text', ''))[:300]!r}"
+            )
+        else:
+            facts = (
+                f"perceive(ocr @{obs_id}): OCR indisponível "
+                f"(backend={res.get('backend', '?')}: "
+                f"{str(res.get('reason', ''))[:150]}); use UIA/visão"
+            )
+    elif base == "read_focused":
         _items, title, _w = (snapshot_fn or active_window_snapshot)()
         read = (focused_fn or focused_value)()
         facts = (
@@ -1027,7 +1053,7 @@ def decide(
     if a.type == "ask" and not (a.text or "").strip():
         raise RuntimeError("ask precisa de text (a pergunta ao humano)")
     if a.type == "perceive" and not (a.text or "").strip():
-        raise RuntimeError("perceive precisa de spec (uia_refresh|read_focused|expand:<nome>)")
+        raise RuntimeError("perceive precisa de spec (uia_refresh|read_focused|ocr|expand:<nome>)")
     if dec.confidence is not None and not (0.0 <= dec.confidence <= 1.0):
         raise RuntimeError(f"confidence fora de 0..1: {dec.confidence}")
     return dec, tm
@@ -1123,23 +1149,26 @@ def observe(action: Action, before_title: str, after_title: str, value: str = ""
 
 def verify(
     action: Action, instruction: str, cfg: dict, before_title: str = "", dry_run: bool = False
-) -> tuple[bool, str]:
+) -> tuple[bool, str, list[str]]:
     """Espera condicional + observação (F3: sem 500+300 ms fixos).
 
     Espera cancelável por condição/evento com polling curto e deadline
     (= verify_wait_ms); timeout retorna observação, sem inventar sucesso.
+    Retorna (ok, nota, ui_after): `ui_after` são os `tipo:nome` do snapshot
+    posterior (p/ confirmação específica de modal/conteúdo em
+    `confirm_effect`; vazio em dry-run).
     """
     if dry_run:
         # F0 dry-run: bloqueia TODOS os efeitos (sem sleep, sem snapshot).
-        return True, "dry_run: efeitos bloqueados (sem verify físico)"
+        return True, "dry_run: efeitos bloqueados (sem verify físico)", []
     deadline_s = max(0.05, int(cfg.get("verify_wait_ms", 500)) / 1000.0)
     ok, _ = verif.wait_for_condition(lambda: False, deadline_s=deadline_s, poll_s=0.1)
     _ = ok  # deadline sempre estoura aqui; a condição real é o snapshot abaixo
     if safety.stop_requested():
-        return False, "aborted"
-    _items, title, _ = active_window_snapshot()
+        return False, "aborted", []
+    items, title, _ = active_window_snapshot()
     value = focused_value() if action.type == "type" else ""
-    return bool(title), observe(action, before_title, title, value)
+    return bool(title), observe(action, before_title, title, value), format_ui_names(items)
 
 
 def _progress_made(prev_note: str, cur_note: str) -> bool:
@@ -1783,7 +1812,7 @@ def run(instruction: str, cfg: dict, dry_run: bool = False) -> dict:
                 result = "done"
                 break
 
-            ok, vnote = verify(
+            ok, vnote, ui_after = verify(
                 _verify_action(dec),
                 instruction,
                 cfg,
@@ -1798,8 +1827,16 @@ def run(instruction: str, cfg: dict, dry_run: bool = False) -> dict:
                 effect_type = dec.action.type
                 if dec.action.type == "hotkey":
                     effect_type = f"hotkey:{(dec.action.key or '').lower()}"
+                # R2 fatia 3: confirmação específica com UIA antes/depois
+                # (modal dispensado, conteúdo visível/novo). Título sozinho
+                # continua sem confirmar — as listas vêm do snapshot real.
+                ui_kwargs: dict = {}
+                if effect_type in ("click", "scroll"):
+                    ui_kwargs = {"ui_before": list(tm.get("ui_names", []) or []),
+                                 "ui_after": list(ui_after or [])}
                 confirmed, cnote = verif.confirm_effect(
-                    effect_type, dec.action.text or "", tm.get("uia_title", ""), vnote, vnote
+                    effect_type, dec.action.text or "", tm.get("uia_title", ""), vnote, vnote,
+                    **ui_kwargs,
                 )
                 if ok and confirmed:
                     statemod.add_evidence(ctx.get("task_state"), f"{label} => {vnote}")

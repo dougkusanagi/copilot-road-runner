@@ -34,12 +34,52 @@ def wait_for_condition(cond, deadline_s: float = 2.0, poll_s: float = 0.1) -> tu
         time.sleep(min(poll_s, 0.1))
 
 
+# Tokens genéricos de diálogo/modal (PT+EN): verbos de confirmação comuns a
+# qualquer app/site — nunca nomes de loja, produto ou tarefa (§4.3: sem
+# `if amazon`). Servem p/ detectar dispensa de intersticial/modal via UIA,
+# não p/ escolher ação.
+_MODAL_TOKENS = (
+    "dialog", "modal", "alert", "confirm", "aviso",
+    "continue", "continuar", "prosseguir",
+    "não salvar", "nao salvar", "don't save", "dont save",
+    "salvar", "save", "cancelar", "cancel", "fechar", "close",
+    "dispensar", "dismiss", "entendi", "ok",
+)
+
+
+def has_modal_indicators(ui_names: list[str] | None) -> bool:
+    """Há sinais de diálogo/modal/intersticial na lista UIA? (puro, testável)."""
+    if not ui_names:
+        return False
+    blob = " | ".join(str(n or "") for n in ui_names).lower()
+    return any(tok in blob for tok in _MODAL_TOKENS)
+
+
+def modal_dismissed(ui_before: list[str] | None, ui_after: list[str] | None) -> bool:
+    """Modal dispensado = indicadores antes, ausentes depois (puro, testável).
+
+    Título sozinho nunca decide: exige as duas listas UIA. Sem listas (None)
+    = inconclusivo (False), preservando "título nunca confirma".
+    """
+    if ui_before is None or ui_after is None:
+        return False
+    return has_modal_indicators(ui_before) and not has_modal_indicators(ui_after)
+
+
 def confirm_effect(
-    action_type: str, expected: str = "", before: str = "", after: str = "", value: str = ""
+    action_type: str, expected: str = "", before: str = "", after: str = "", value: str = "",
+    *,
+    ui_before: list[str] | None = None,
+    ui_after: list[str] | None = None,
 ) -> tuple[bool, str]:
     """Confirmação específica do efeito (puro, testável).
 
     Retorna (confirmado, nota). Título/árvore mudando sozinho NÃO confirma.
+    `ui_before`/`ui_after` (listas `tipo:nome` do snapshot) habilitam duas
+    confirmações específicas sem título:
+      - click dispensando modal: indicadores antes, ausentes depois;
+      - click/scroll com conteúdo esperado visível depois / conteúdo novo.
+    Sem as listas, vale o comportamento anterior (só type/ctrl+t confirmam).
     """
     if action_type == "type" and expected:
         if value and (expected.strip()[:40] in value or "text visible in focused field" in value):
@@ -61,6 +101,15 @@ def confirm_effect(
         if "window " in after and " -> " in after:
             return True, "efeito confirmado: nova aba observada"
         return False, "não confirmado: nova aba não observada"
+    if action_type == "click" and modal_dismissed(ui_before, ui_after):
+        return True, "efeito confirmado: diálogo/modal dispensado (indicadores sumiram da UIA)"
+    if action_type in ("click", "scroll") and expected and ui_after is not None:
+        blob = " | ".join(str(n or "") for n in ui_after).lower()
+        if expected.strip()[:60].lower() in blob:
+            return True, "efeito confirmado: conteúdo esperado visível após a ação"
+    if action_type == "scroll" and ui_before is not None and ui_after is not None:
+        if set(ui_before) != set(ui_after):
+            return True, "efeito confirmado: conteúdo mudou após scroll"
     # Cliques/scroll/hotkey: confirmação exige observação seguinte específica;
     # aqui só registra envio (confirmação vem do próximo snapshot).
     return False, "enviado; confirmação pendente na próxima observação"

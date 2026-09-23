@@ -61,7 +61,7 @@ TOOLS_SPEC = """\
 - {"type":"use_skill","skill":"blender-cli","args":{"recipe":"cubo"}} — skill CLI/GUI do catálogo (só quando o pedido pedir explicitamente; GUI orienta, CLI executa receita delimitada)
 - {"type":"sequence","steps":[{"type":"hotkey","keys":"ctrl+l"},{"type":"type_text","text":"https://www.amazon.com"},{"type":"press_key","key":"enter"}]} — até 3 primitivas de TECLADO/ESPERA com pré-condições explícitas (sem cliques que navegam, sem drags); modal/foco inesperado interrompe
 - {"type":"ask","text":"qual perfil do Chrome devo usar, Seu Chrome ou Silver?"} — perguntar ao HUMANO (human-in-the-loop); SÓ para dúvida honesta que trava a tarefa (escolha entre dados de pessoas, ambiguidade real do pedido). NUNCA pergunte o que dá para observar na tela; máx 3 por run
-- {"type":"perceive","perception":"uia_refresh|read_focused|expand:<nome>"} — RELER a tela sem clicar/digitar (volta como fatos na próxima observação). uia_refresh = nova leitura dos elementos; read_focused = ler o texto do campo com foco; expand:<nome> = detalhar o ramo cujo nome contém o texto (ex: expand:Pesquisar). Use quando a lista parece desatualizada ou falta o valor de um campo. NUNCA clica, digita ou resolve tarefa sozinho; máx 6 por run"""
+- {"type":"perceive","perception":"uia_refresh|read_focused|expand:<nome>|ocr"} — RELER a tela sem clicar/digitar (volta como fatos na próxima observação). uia_refresh = nova leitura dos elementos; read_focused = ler o texto do campo com foco; expand:<nome> = detalhar o ramo cujo nome contém o texto (ex: expand:Pesquisar); ocr = ler o texto visível da tela via OCR local (quando a lista só tem moldura ou falta um valor; indisponível = fato honesto, sem backend). Use quando a lista parece desatualizada ou falta o valor de um campo. NUNCA clica, digita ou resolve tarefa sozinho; máx 6 por run"""
 
 PLANNER_SYSTEM = (
     """You are the planner of a local Windows computer-use agent. Think fast, output little.
@@ -118,7 +118,7 @@ Rules:
 - NEVER repeat the same action twice in a row; if it did not advance, do something else.
 - Prefer uia_click when the target name appears in UI elements.
 - Use visual_action ONLY when the element is missing from UI elements.
-- Use perceive ONLY to re-read (uia_refresh/read_focused): it never
+- Use perceive ONLY to re-read (uia_refresh/read_focused/expand:<nome>/ocr): it never
   clicks, types or finishes anything — its facts come back as observation
   for your NEXT decision. Do not chain perceive twice without acting.
 - Each recent action shows its OBSERVED result after "=>" (window before/after,
@@ -227,7 +227,7 @@ class PlannerDecision(BaseModel):
     args: dict | None = None
     # F6: sequência de até 3 primitivas escolhida pelo modelo.
     steps: list[dict] | None = None
-    # R1/R2: percepção read-only pedida pelo modelo (uia_refresh|read_focused|expand:<nome>).
+    # R1/R2: percepção read-only pedida pelo modelo (uia_refresh|read_focused|expand:<nome>|ocr).
     perception: str | None = None
 
     @model_validator(mode="before")

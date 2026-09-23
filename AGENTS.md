@@ -41,6 +41,16 @@
   com miss/ambíguo honestos, sem input). OCR segue pendente: sem `winrt`/
   tesseract no ambiente; candidatos (Windows.Media.Ocr, tesseract) exigem
   spike de backend + medição antes de entrar no `perceive`.
+  R2 fatia 3 em 23/09 (286 verdes, `tests/test_r2_visual.py` + `ocr.py`):
+  spike de OCR entregue e ligado ao `perceive` (`ocr` como 4ª spec, ao lado
+  de uia_refresh/read_focused/expand; `ocr.read()` com backends
+  winrt→tesseract e `unavailable` honesto — neste ambiente segue sem backend,
+  fato "indisponível", nunca texto inventado); `verify()` devolve `ui_after`
+  e `confirm_effect` confirma com UIA antes/depois (modal dispensado,
+  conteúdo esperado visível, conteúdo novo pós-scroll) — título sozinho
+  continua sem confirmar. R3 fatia 1 commitada (bateria 30 cenas +
+  `evals/probe_battery.py`, offline). Gates com modelos reais (probes ≥30
+  cenas ×3, leitura visual, E2E Sandbox) seguem pendentes.
 - Produto: computer use local, rápido, para GPU a partir de **6 GB de VRAM**;
   entender pedidos, observar monitores/janelas e usar mouse/teclado reais.
   UIA localiza e informa; modo GUI não usa edição semântica invisível ou open_url.
